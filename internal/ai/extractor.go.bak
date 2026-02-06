@@ -1,0 +1,190 @@
+package ai
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/facturaIA/invoice-ocr-service/internal/models"
+	"github.com/shopspring/decimal"
+)
+
+type Extractor struct {
+	provider   Provider
+	categories []string
+}
+
+func NewExtractor(provider Provider, categories []string) *Extractor {
+	return &Extractor{
+		provider:   provider,
+		categories: categories,
+	}
+}
+
+func (e *Extractor) Extract(ocrText string, imageBase64 string) (*models.Invoice, float64, error) {
+	startTime := time.Now()
+	prompt := e.buildPromptDGII(ocrText)
+	response, err := e.provider.ExtractData(prompt, imageBase64)
+	if err != nil {
+		return nil, 0, fmt.Errorf("AI extraction failed: %w", err)
+	}
+	duration := time.Since(startTime).Seconds()
+	invoice, err := e.parseResponse(response, ocrText)
+	if err != nil {
+		return nil, duration, fmt.Errorf("failed to parse AI response: %w", err)
+	}
+	return invoice, duration, nil
+}
+
+func (e *Extractor) buildPromptDGII(ocrText string) string {
+	currentYear := time.Now().Year()
+
+	prompt := fmt.Sprintf(`Eres un experto en facturas fiscales de República Dominicana. Extrae TODOS los datos de esta factura para el sistema DGII.
+
+IMPORTANTE - Facturas dominicanas tienen:
+- NCF (Número de Comprobante Fiscal): formato B0100000001, E310000000001
+- RNC: 9 dígitos (empresas) o 11 dígitos (cédula)
+- ITBIS: Impuesto del 18%% sobre productos gravados
+
+Devuelve SOLO JSON válido (sin markdown):
+{
+  "ncf": "B0100000001",
+  "rncEmisor": "123456789",
+  "vendor": "Nombre del negocio",
+  "rncReceptor": "987654321",
+  "date": "YYYY-MM-DD",
+  "subtotal": 1000.00,
+  "tax": 180.00,
+  "propina": 0.00,
+  "total": 1180.00,
+  "formaPago": "01",
+  "tipoBienServicio": "02",
+  "items": [
+    {
+      "name": "Producto",
+      "amount": 100.00,
+      "quantity": 1,
+      "isTaxed": true
+    }
+  ],
+  "categories": ["Food & Dining"]
+}
+
+REGLAS:
+1. NCF: Busca "NCF:", "Comprobante:", "B01", "B02", "B04", "B14", "B15", "E31"
+2. RNC Emisor: Busca "RNC:", "R.N.C." seguido de 9 u 11 dígitos
+3. RNC Receptor: Busca "RNC Cliente:", "Cédula:"
+4. Subtotal: Monto antes de ITBIS ("Sub-Total", "Base Imponible")
+5. tax (ITBIS): 18%% - busca "ITBIS", "I.T.B.I.S", "IVA"
+6. propina: 10%% legal - busca "Propina", "Servicio"
+7. formaPago: 01=Efectivo, 02=Cheque/Transferencia, 03=Tarjeta, 04=Crédito
+8. tipoBienServicio: 01=Personal, 02=Servicios, 03=Arrendamiento, 09=Costo venta, 13=Otros
+9. Año por defecto: %d
+10. Montos como números decimales
+11. Si no encuentras un dato, usa string vacío o 0
+
+Texto de la factura:
+%s`, currentYear, ocrText)
+
+	return prompt
+}
+
+func (e *Extractor) parseResponse(response string, ocrText string) (*models.Invoice, error) {
+	cleaned := strings.TrimSpace(response)
+	cleaned = strings.ReplaceAll(cleaned, "```json", "")
+	cleaned = strings.ReplaceAll(cleaned, "```", "")
+	cleaned = strings.TrimSpace(cleaned)
+
+	var raw struct {
+		NCF              string      `json:"ncf"`
+		RNCEmisor        string      `json:"rncEmisor"`
+		RNCReceptor      string      `json:"rncReceptor"`
+		Vendor           string      `json:"vendor"`
+		Date             string      `json:"date"`
+		Subtotal         json.Number `json:"subtotal"`
+		Tax              json.Number `json:"tax"`
+		Propina          json.Number `json:"propina"`
+		Total            json.Number `json:"total"`
+		FormaPago        string      `json:"formaPago"`
+		TipoBienServicio string      `json:"tipoBienServicio"`
+		Categories       []string    `json:"categories"`
+		Items            []struct {
+			Name     string      `json:"name"`
+			Amount   json.Number `json:"amount"`
+			IsTaxed  bool        `json:"isTaxed"`
+			Quantity int         `json:"quantity"`
+		} `json:"items"`
+	}
+
+	err := json.Unmarshal([]byte(cleaned), &raw)
+	if err != nil {
+		return nil, fmt.Errorf("JSON parse error: %w\nResponse: %s", err, cleaned)
+	}
+
+	invoice := &models.Invoice{
+		Vendor:      raw.Vendor,
+		Categories:  raw.Categories,
+		RawText:     ocrText,
+		Confidence:  0.85,
+		ProcessedAt: time.Now(),
+	}
+
+	// Store DGII fields in RawText as JSON for later extraction
+	dgiiFields := map[string]interface{}{
+		"ncf":              raw.NCF,
+		"rncEmisor":        cleanRNC(raw.RNCEmisor),
+		"rncReceptor":      cleanRNC(raw.RNCReceptor),
+		"subtotal":         raw.Subtotal,
+		"propina":          raw.Propina,
+		"formaPago":        raw.FormaPago,
+		"tipoBienServicio": raw.TipoBienServicio,
+	}
+	if dgiiJSON, err := json.Marshal(dgiiFields); err == nil {
+		invoice.RawText = string(dgiiJSON) + "\n---OCR---\n" + ocrText
+	}
+
+	if raw.Date != "" {
+		for _, format := range []string{"2006-01-02", "02/01/2006", "02-01-2006"} {
+			if date, err := time.Parse(format, raw.Date); err == nil {
+				invoice.Date = date
+				break
+			}
+		}
+	}
+
+	if raw.Total != "" {
+		if total, err := decimal.NewFromString(string(raw.Total)); err == nil {
+			invoice.Total = total
+		}
+	}
+
+	if raw.Tax != "" {
+		if tax, err := decimal.NewFromString(string(raw.Tax)); err == nil {
+			invoice.Tax = tax
+		}
+	}
+
+	invoice.Items = make([]models.InvoiceItem, len(raw.Items))
+	for i, item := range raw.Items {
+		amount, _ := decimal.NewFromString(string(item.Amount))
+		invoice.Items[i] = models.InvoiceItem{
+			Name:     item.Name,
+			Amount:   amount,
+			IsTaxed:  item.IsTaxed,
+			Quantity: item.Quantity,
+		}
+	}
+
+	return invoice, nil
+}
+
+func cleanRNC(rnc string) string {
+	var result strings.Builder
+	for _, r := range rnc {
+		if r >= '0' && r <= '9' {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
+}

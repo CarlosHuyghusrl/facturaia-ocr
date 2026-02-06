@@ -1,0 +1,141 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+var jwtSecret []byte
+
+// Claims represents the JWT claims structure
+type Claims struct {
+	UserID        string `json:"user_id"`
+	Email         string `json:"email"`
+	EmpresaAlias  string `json:"empresa_alias"`
+	EmpresaNombre string `json:"empresa_nombre"`
+	Rol           string `json:"rol"`
+	jwt.RegisteredClaims
+}
+
+type contextKey string
+
+// ClaimsContextKey is the key used to store claims in context
+const ClaimsContextKey contextKey = "claims"
+
+// Init initializes the JWT secret from environment
+func Init() error {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		secret = "dev_secret_change_in_production_32chars!"
+	}
+	jwtSecret = []byte(secret)
+	return nil
+}
+
+// GenerateToken creates a new JWT token
+func GenerateToken(userID, email, empresaAlias, empresaNombre, rol string) (string, error) {
+	claims := &Claims{
+		UserID:        userID,
+		Email:         email,
+		EmpresaAlias:  empresaAlias,
+		EmpresaNombre: empresaNombre,
+		Rol:           rol,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer: "facturaia",
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+// ValidateToken parses and validates a JWT token
+func ValidateToken(tokenString string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return jwtSecret, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+		return claims, nil
+	}
+
+	return nil, errors.New("invalid token")
+}
+
+// JWTMiddleware validates JWT and adds claims to context
+func JWTMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip auth for health check and login
+		if r.URL.Path == "/health" || r.URL.Path == "/api/health" || r.URL.Path == "/api/login" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
+			return
+		}
+
+		// Extract token from "Bearer <token>"
+		parts := strings.Split(authHeader, " ")
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			http.Error(w, `{"error":"invalid authorization format"}`, http.StatusUnauthorized)
+			return
+		}
+
+		claims, err := ValidateToken(parts[1])
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"invalid token: %s"}`, err.Error()), http.StatusUnauthorized)
+			return
+		}
+
+		// Add claims to context
+		ctx := context.WithValue(r.Context(), ClaimsContextKey, claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// GetClaimsFromContext extracts claims from request context
+func GetClaimsFromContext(ctx context.Context) (*Claims, error) {
+	claims, ok := ctx.Value(ClaimsContextKey).(*Claims)
+	if !ok {
+		return nil, errors.New("claims not found in context")
+	}
+	return claims, nil
+}
+
+// RequireRole middleware checks if user has required role
+func RequireRole(roles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, err := GetClaimsFromContext(r.Context())
+			if err != nil {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+
+			for _, role := range roles {
+				if claims.Rol == role {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			http.Error(w, `{"error":"insufficient permissions"}`, http.StatusForbidden)
+		})
+	}
+}
