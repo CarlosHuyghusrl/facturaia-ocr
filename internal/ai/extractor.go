@@ -135,16 +135,35 @@ Devuelve SOLO JSON valido (sin markdown, sin comentarios):
   "tipoIdReceptor": "1=RNC, 2=Cedula",
   "fechaFactura": "YYYY-MM-DD",
   "fechaVencimiento": "YYYY-MM-DD o null",
-  "subtotal": numero sin comas (usa 0 si no aparece, NUNCA null),
-  "itbis": numero (impuesto 18%%, usa 0 si no aparece, NUNCA null),
-  "itbisRetenido": numero (usa 0 si no aparece, NUNCA null),
-  "propina": numero (usa 0 si no aparece, NUNCA null),
-  "otrosImpuestos": numero (usa 0 si no aparece, NUNCA null),
+  "subtotal": numero (base antes de impuestos, usa 0 si no aparece),
+  "descuento": numero (descuento aplicado, usa 0 si no aparece),
+  "itbis": numero (ITBIS 18%% facturado, usa 0 si no aparece),
+  "itbisTasa": numero (18 normal o 16 zona franca, usa 18 por defecto),
+  "itbisRetenido": numero (ITBIS retenido 30%% o 100%%, usa 0 si no aparece),
+  "itbisExento": numero (monto exento de ITBIS, usa 0 si no aparece),
+  "isr": numero (ISR retenido, usa 0 si no aparece),
+  "retencionIsrTipo": numero 1-8 (tipo retencion ISR, usa 0 si no aparece),
+  "isc": numero (Impuesto Selectivo al Consumo, usa 0 si no aparece),
+  "iscCategoria": "seguros|telecom|alcohol|tabaco|vehiculos|combustibles" o null,
+  "cdtMonto": numero (Contribucion Desarrollo Telecom 2%%, usa 0 si no aparece),
+  "cargo911": numero (Contribucion al 911, usa 0 si no aparece),
+  "propina": numero (propina legal 10%%, usa 0 si no aparece),
+  "otrosImpuestos": numero (impuestos no clasificados, usa 0 si no aparece),
+  "montoNoFacturable": numero (propinas voluntarias, reembolsos, usa 0 si no aparece),
   "total": numero final a pagar (usa 0 si no aparece, NUNCA null),
   "formaPago": "01-07 segun codigo",
   "tipoBienServicio": "01-13 segun codigo",
   "items": [{"descripcion": "...", "cantidad": 1, "precioUnit": 100, "importe": 100}]
 }
+
+## GUIA DE IMPUESTOS DOMINICANOS
+- ITBIS: 18%% (normal) o 16%% (zona franca) - busca "ITBIS", "I.T.B.I.S", "IVA"
+- ISC Seguros: 16%% sobre primas - facturas de aseguradoras
+- ISC Telecom: 10%% sobre servicios - Claro, Altice, Viva
+- CDT: 2%% adicional en telecom - "Contribucion Desarrollo Telecomunicaciones"
+- 911: Cargo fijo en lineas telefonicas - "Contribucion 911"
+- Propina: 10%% legal en restaurantes/hoteles - "Propina", "Servicio"
+- ISR: Retencion sobre servicios - "Retencion ISR", "ISR", "Impuesto Renta"
 
 ## REGLAS CRITICAS
 
@@ -197,10 +216,20 @@ Extrae y devuelve SOLO JSON valido con esta estructura exacta (sin markdown, sin
   "fechaFactura": "YYYY-MM-DD",
   "fechaVencimiento": "YYYY-MM-DD",
   "subtotal": 1000.00,
+  "descuento": 0.00,
   "itbis": 180.00,
+  "itbisTasa": 18,
   "itbisRetenido": 0.00,
+  "itbisExento": 0.00,
+  "isr": 0.00,
+  "retencionIsrTipo": 0,
+  "isc": 0.00,
+  "iscCategoria": null,
+  "cdtMonto": 0.00,
+  "cargo911": 0.00,
   "propina": 0.00,
   "otrosImpuestos": 0.00,
+  "montoNoFacturable": 0.00,
   "total": 1180.00,
   "formaPago": "01",
   "tipoBienServicio": "02",
@@ -268,12 +297,29 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 		FechaFactura     string      `json:"fechaFactura"`
 		FechaVencimiento string      `json:"fechaVencimiento"`
 		FechaPago        string      `json:"fechaPago"`
-		Subtotal         interface{} `json:"subtotal"`
-		ITBIS            interface{} `json:"itbis"`
-		ITBISRetenido    interface{} `json:"itbisRetenido"`
+		// Montos base
+		Subtotal  interface{} `json:"subtotal"`
+		Descuento interface{} `json:"descuento"`
+		// ITBIS
+		ITBIS                 interface{} `json:"itbis"`
+		ITBISTasa             interface{} `json:"itbisTasa"`
+		ITBISRetenido         interface{} `json:"itbisRetenido"`
+		ITBISExento           interface{} `json:"itbisExento"`
+		ITBISProporcionalidad interface{} `json:"itbisProporcionalidad"`
+		ITBISCosto            interface{} `json:"itbisCosto"`
+		// ISR
 		ISR              interface{} `json:"isr"`
-		Propina          interface{} `json:"propina"`
-		OtrosImpuestos   interface{} `json:"otrosImpuestos"`
+		RetencionISRTipo interface{} `json:"retencionIsrTipo"`
+		// ISC
+		ISC          interface{} `json:"isc"`
+		ISCCategoria string      `json:"iscCategoria"`
+		// Otros cargos
+		CDTMonto          interface{} `json:"cdtMonto"`
+		Cargo911          interface{} `json:"cargo911"`
+		Propina           interface{} `json:"propina"`
+		OtrosImpuestos    interface{} `json:"otrosImpuestos"`
+		MontoNoFacturable interface{} `json:"montoNoFacturable"`
+		// Total
 		Total            interface{} `json:"total"`
 		FormaPago        string      `json:"formaPago"`
 		TipoBienServicio string      `json:"tipoBienServicio"`
@@ -331,13 +377,34 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 	invoice.FechaPago = parseDate(raw.FechaPago)
 	invoice.Date = invoice.FechaFactura // Legacy
 
-	// Parse amounts
+	// Parse amounts - Base
 	invoice.Subtotal = parseDecimal(raw.Subtotal)
+	invoice.Descuento = parseDecimal(raw.Descuento)
+
+	// Parse amounts - ITBIS
 	invoice.ITBIS = parseDecimal(raw.ITBIS)
+	invoice.ITBISTasa = parseDecimal(raw.ITBISTasa)
 	invoice.ITBISRetenido = parseDecimal(raw.ITBISRetenido)
+	invoice.ITBISExento = parseDecimal(raw.ITBISExento)
+	invoice.ITBISProporcionalidad = parseDecimal(raw.ITBISProporcionalidad)
+	invoice.ITBISCosto = parseDecimal(raw.ITBISCosto)
+
+	// Parse amounts - ISR
 	invoice.ISR = parseDecimal(raw.ISR)
+	invoice.RetencionISRTipo = int(parseDecimal(raw.RetencionISRTipo).IntPart())
+
+	// Parse amounts - ISC
+	invoice.ISC = parseDecimal(raw.ISC)
+	invoice.ISCCategoria = raw.ISCCategoria
+
+	// Parse amounts - Otros cargos
+	invoice.CDTMonto = parseDecimal(raw.CDTMonto)
+	invoice.Cargo911 = parseDecimal(raw.Cargo911)
 	invoice.Propina = parseDecimal(raw.Propina)
 	invoice.OtrosImpuestos = parseDecimal(raw.OtrosImpuestos)
+	invoice.MontoNoFacturable = parseDecimal(raw.MontoNoFacturable)
+
+	// Parse amounts - Total
 	invoice.Total = parseDecimal(raw.Total)
 	invoice.Tax = invoice.ITBIS // Legacy
 

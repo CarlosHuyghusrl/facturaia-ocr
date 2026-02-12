@@ -28,13 +28,32 @@ type Invoice struct {
 	FechaVencimiento time.Time `json:"fechaVencimiento,omitempty"` // Fecha de vencimiento
 	FechaPago        time.Time `json:"fechaPago,omitempty"`        // Fecha de pago
 
-	// DGII - Montos
-	Subtotal       decimal.Decimal `json:"subtotal,omitempty"`       // Subtotal antes de impuestos
-	ITBIS          decimal.Decimal `json:"itbis,omitempty"`          // ITBIS (18%)
-	ITBISRetenido  decimal.Decimal `json:"itbisRetenido,omitempty"`  // ITBIS retenido
-	ISR            decimal.Decimal `json:"isr,omitempty"`            // ISR retenido
-	Propina        decimal.Decimal `json:"propina,omitempty"`        // Propina legal (10%)
-	OtrosImpuestos decimal.Decimal `json:"otrosImpuestos,omitempty"` // Otros impuestos
+	// DGII - Montos Base
+	Subtotal  decimal.Decimal `json:"subtotal,omitempty"`  // Subtotal antes de impuestos
+	Descuento decimal.Decimal `json:"descuento,omitempty"` // Descuento (afecta base imponible ITBIS)
+
+	// DGII - ITBIS (Impuesto Transferencia Bienes y Servicios)
+	ITBIS                 decimal.Decimal `json:"itbis,omitempty"`                 // ITBIS facturado (18% o 16% zona franca)
+	ITBISTasa             decimal.Decimal `json:"itbisTasa,omitempty"`             // Tasa aplicada (18 o 16)
+	ITBISRetenido         decimal.Decimal `json:"itbisRetenido,omitempty"`         // ITBIS retenido (30% o 100%)
+	ITBISExento           decimal.Decimal `json:"itbisExento,omitempty"`           // Monto exento de ITBIS
+	ITBISProporcionalidad decimal.Decimal `json:"itbisProporcionalidad,omitempty"` // Art. 349 - gastos mixtos
+	ITBISCosto            decimal.Decimal `json:"itbisCosto,omitempty"`            // ITBIS no deducible
+
+	// DGII - ISR (Impuesto Sobre la Renta)
+	ISR              decimal.Decimal `json:"isr,omitempty"`              // ISR retenido
+	RetencionISRTipo int             `json:"retencionIsrTipo,omitempty"` // Código 1-8 tipo retención
+
+	// DGII - ISC (Impuesto Selectivo al Consumo)
+	ISC          decimal.Decimal `json:"isc,omitempty"`          // ISC monto
+	ISCCategoria string          `json:"iscCategoria,omitempty"` // seguros|telecom|alcohol|tabaco|vehiculos|combustibles
+
+	// DGII - Otros Cargos
+	CDTMonto          decimal.Decimal `json:"cdtMonto,omitempty"`          // Contribución Desarrollo Telecom (2%)
+	Cargo911          decimal.Decimal `json:"cargo911,omitempty"`          // Contribución al 911
+	Propina           decimal.Decimal `json:"propina,omitempty"`           // Propina legal (10%)
+	OtrosImpuestos    decimal.Decimal `json:"otrosImpuestos,omitempty"`    // Otros impuestos no clasificados
+	MontoNoFacturable decimal.Decimal `json:"montoNoFacturable,omitempty"` // Propinas voluntarias, reembolsos
 
 	// DGII - Clasificacion
 	FormaPago        string `json:"formaPago,omitempty"`        // 01=Efectivo, 02=Cheque, 03=Tarjeta, etc.
