@@ -21,6 +21,7 @@ import (
 	"github.com/facturaIA/invoice-ocr-service/internal/db"
 	"github.com/facturaIA/invoice-ocr-service/internal/models"
 	"github.com/facturaIA/invoice-ocr-service/internal/ocr"
+	"github.com/facturaIA/invoice-ocr-service/internal/services"
 	"github.com/facturaIA/invoice-ocr-service/internal/storage"
 )
 
@@ -68,6 +69,9 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/facturas/{id}/imagen", h.GetClientInvoiceImage).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}", h.GetClientInvoice).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}", h.DeleteClientInvoice).Methods("DELETE")
+
+	// === VALIDACION IMPUESTOS DGII ===
+	router.HandleFunc("/api/v1/invoices/validate", h.ValidateInvoiceTaxes).Methods("POST")
 
 	return router
 }
@@ -333,6 +337,44 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// === PASO: Validación cruzada de impuestos ===
+	validationInput := &services.InvoiceInput{
+		MontoServicios:       decimalToFloat64(invoice.Subtotal), // Using subtotal as base
+		MontoBienes:          0,
+		Descuento:            0, // TODO: extraer de invoice cuando se implemente
+		ITBISFacturado:       decimalToFloat64(invoice.ITBIS),
+		ITBISExento:          0,
+		ITBISRetenido:        decimalToFloat64(invoice.ITBISRetenido),
+		ISCMonto:             0, // TODO: extraer de invoice.ISC cuando se implemente
+		CDTMonto:             0,
+		Cargo911:             0,
+		PropinaLegal:         decimalToFloat64(invoice.Propina),
+		OtrosImpuestos:       decimalToFloat64(invoice.OtrosImpuestos),
+		RetencionISRMonto:    decimalToFloat64(invoice.ISR),
+		TotalFactura:         decimalToFloat64(invoice.Total),
+		NCF:                  invoice.NCF,
+	}
+
+	validator := services.NewTaxValidator()
+	validationResult := validator.Validate(validationInput)
+
+	// Determinar extraction_status según validación y confidence
+	extractionStatus := "validated"
+	if !validationResult.Valid {
+		extractionStatus = "error"
+	} else if validationResult.NeedsReview || invoice.Confidence < 0.85 {
+		extractionStatus = "review"
+		validationResult.NeedsReview = true
+	}
+
+	// Serializar errores/warnings para review_notes
+	reviewNotes := ""
+	if len(validationResult.Errors) > 0 || len(validationResult.Warnings) > 0 {
+		if rn, err := json.Marshal(validationResult); err == nil {
+			reviewNotes = string(rn)
+		}
+	}
+
 	// Save to facturas_clientes (client mobile app table)
 	var savedClientInvoice *db.ClientInvoice
 	if db.Pool != nil && invoice != nil {
@@ -360,6 +402,12 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Determinar estado según extraction_status
+		estado := "pendiente"
+		if extractionStatus == "validated" {
+			estado = "procesado"
+		}
+
 		clientInvoice := &db.ClientInvoice{
 			ClienteID:        claims.UserID,
 			ArchivoURL:       imagenURL,
@@ -369,7 +417,7 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			Monto:            decimalToFloat64(invoice.Total),
 			NCF:              invoice.NCF,
 			Proveedor:        invoice.NombreEmisor,
-			Estado:           "pendiente",
+			Estado:           estado,
 			NotasCliente:     "",
 			EmisorRNC:        invoice.RNCEmisor,
 			ReceptorNombre:   invoice.NombreReceptor,
@@ -386,6 +434,8 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			ConfidenceScore:  invoice.Confidence,
 			RawOCRJSON:       ocrNotes,
 			ItemsJSON:        itemsJSON,
+			ExtractionStatus: extractionStatus,
+			ReviewNotes:      reviewNotes,
 		}
 
 		if err := db.SaveClientInvoice(ctx, clientInvoice); err != nil {
@@ -395,56 +445,67 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build response matching frontend Factura interface
-	invoiceMap := map[string]interface{}{
-		// Fields matching frontend Factura interface (snake_case)
+	// Build data object with 13 campos fiscales
+	dataMap := map[string]interface{}{
+		// Identificación
 		"ncf":              invoice.NCF,
-		"tipo_comprobante": invoice.TipoNCF,
+		"tipo_ncf":         invoice.TipoNCF,
 		"emisor_rnc":       invoice.RNCEmisor,
 		"emisor_nombre":    invoice.NombreEmisor,
-		"fecha_emision":    invoice.FechaFactura,
-		"fecha_vencimiento": invoice.FechaVencimiento,
-		"subtotal":         invoice.Subtotal,
-		"itbis":            invoice.ITBIS,
-		"total":            invoice.Total,
-		"estado":           "pendiente",
-		"estado_ocr":       "completado",
-		"imagen_url":       imagenURL,
-		"confidence_score":  invoice.Confidence,
+		"fecha_documento":  invoice.FechaFactura,
 
-		// DGII extra fields
-		"rncEmisor":        invoice.RNCEmisor,
-		"nombreEmisor":     invoice.NombreEmisor,
-		"rncReceptor":      invoice.RNCReceptor,
-		"nombreReceptor":   invoice.NombreReceptor,
-		"tipoIdEmisor":     invoice.TipoIDEmisor,
-		"tipoIdReceptor":   invoice.TipoIDReceptor,
-		"fechaFactura":     invoice.FechaFactura,
-		"fechaVencimiento": invoice.FechaVencimiento,
-		"itbisRetenido":    invoice.ITBISRetenido,
-		"propina":          invoice.Propina,
-		"otrosImpuestos":   invoice.OtrosImpuestos,
-		"formaPago":        invoice.FormaPago,
-		"tipoBienServicio": invoice.TipoBienServicio,
-		"tipoFactura":      invoice.TipoFactura,
+		// Montos base
+		"monto_servicios":  decimalToFloat64(invoice.Subtotal),
+		"monto_bienes":     0,
+		"descuento":        0,
+
+		// ITBIS
+		"itbis_facturado":       decimalToFloat64(invoice.ITBIS),
+		"itbis_exento":          0,
+		"itbis_proporcionalidad": 0,
+		"itbis_costo":           0,
+		"itbis_retenido":        decimalToFloat64(invoice.ITBISRetenido),
+
+		// ISC y otros
+		"isc_monto":             0,
+		"cdt_monto":             0,
+		"cargo_911":             0,
+		"propina_legal":         decimalToFloat64(invoice.Propina),
+		"monto_no_facturable":   0,
+
+		// Retenciones ISR
+		"retencion_isr_tipo":  nil,
+		"retencion_isr_monto": decimalToFloat64(invoice.ISR),
+
+		// Otros
+		"otros_impuestos":  decimalToFloat64(invoice.OtrosImpuestos),
+		"total_factura":    decimalToFloat64(invoice.Total),
+
+		// Metadata
+		"confidence_score": invoice.Confidence,
+		"forma_pago":       invoice.FormaPago,
+		"tipo_bien_servicio": invoice.TipoBienServicio,
+		"imagen_url":       imagenURL,
 		"items":            invoice.Items,
-		"empresa_alias":    claims.EmpresaAlias,
 	}
 
+	// Build response con nuevo formato
 	responseData := map[string]interface{}{
-		"success":        true,
-		"invoice":        invoiceMap,
-		"ocrDuration":    ocrDuration,
-		"aiDuration":     aiDuration,
-		"totalDuration":  totalDuration,
+		"success":           true,
+		"extraction_status": extractionStatus,
+		"data":              dataMap,
+		"validation":        validationResult,
+		"ocrDuration":       ocrDuration,
+		"aiDuration":        aiDuration,
+		"totalDuration":     totalDuration,
 	}
 
 	// Add saved invoice info if available
 	if savedClientInvoice != nil {
-		responseData["invoice"].(map[string]interface{})["id"] = savedClientInvoice.ID
-		responseData["invoice"].(map[string]interface{})["created_at"] = savedClientInvoice.CreatedAt
+		responseData["invoice_id"] = savedClientInvoice.ID
+		responseData["created_at"] = savedClientInvoice.CreatedAt
 		// Use proxy URL so mobile app can access the image
-		responseData["invoice"].(map[string]interface{})["imagen_url"] = fmt.Sprintf("/api/facturas/%s/imagen", savedClientInvoice.ID)
+		dataMap["imagen_url"] = fmt.Sprintf("/api/facturas/%s/imagen", savedClientInvoice.ID)
 		responseData["saved_to_db"] = true
 	} else {
 		responseData["saved_to_db"] = false
@@ -765,4 +826,24 @@ func (h *Handler) sendError(w http.ResponseWriter, statusCode int, message strin
 func decimalToFloat64(d decimal.Decimal) float64 {
 	f, _ := d.Float64()
 	return f
+}
+
+// ValidateInvoiceTaxes validates tax fields from OCR/AI extraction
+// POST /api/v1/invoices/validate
+func (h *Handler) ValidateInvoiceTaxes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Parse input
+	var input services.InvoiceInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	// Validate
+	validator := services.NewTaxValidator()
+	result := validator.Validate(&input)
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(result)
 }

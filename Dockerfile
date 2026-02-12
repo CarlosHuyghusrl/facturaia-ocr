@@ -42,16 +42,17 @@ RUN chown -R app:app /app
 # Switch to non-root user
 USER app
 
-# Port is configurable via environment variable (Railway sets $PORT)
-ENV PORT=8080
-EXPOSE 8080
+# Port is configurable via environment variable
+ENV PORT=8081
+EXPOSE 8081
 
 # Set Go runtime environment variables for memory optimization
 ENV GOGC=50
 ENV GOMEMLIMIT=450MiB
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3   CMD wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1
+# Health check using $PORT variable - no zombies with --init flag
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:${PORT:-8081}/health || exit 1
 
 # Run
 CMD ["./server"]
