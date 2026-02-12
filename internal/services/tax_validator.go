@@ -48,6 +48,7 @@ type InvoiceInput struct {
 
 	// ITBIS
 	ITBISFacturado       float64 `json:"itbis_facturado"`
+	ITBISTasa            float64 `json:"itbis_tasa"`  // 18 (normal) o 16 (zona franca)
 	ITBISExento          float64 `json:"itbis_exento"`
 	ITBISRetenido        float64 `json:"itbis_retenido"`
 	ITBISProporcionalidad float64 `json:"itbis_proporcionalidad"`
@@ -104,7 +105,13 @@ func (v *TaxValidator) Validate(input *InvoiceInput) *ValidationResult {
 		baseGravada = 0
 	}
 	montoFacturado := input.MontoServicios + input.MontoBienes - input.Descuento
-	itbisEsperado := baseGravada * 0.18
+
+	// ITBIS rate: 18% normal, 16% for zona franca
+	itbisTasa := 0.18
+	if input.ITBISTasa == 16 {
+		itbisTasa = 0.16
+	}
+	itbisEsperado := baseGravada * itbisTasa
 	totalEsperado := montoFacturado + input.ITBISFacturado + input.ISCMonto +
 		input.CDTMonto + input.Cargo911 + input.PropinaLegal + input.OtrosImpuestos
 
@@ -231,7 +238,7 @@ func (v *TaxValidator) validateTelecom(input *InvoiceInput, result *ValidationRe
 	}
 }
 
-// validateNCF checks NCF format and expiration
+// validateNCF checks NCF format, type and expiration
 func (v *TaxValidator) validateNCF(input *InvoiceInput, result *ValidationResult) {
 	if input.NCF == "" {
 		return
@@ -244,6 +251,35 @@ func (v *TaxValidator) validateNCF(input *InvoiceInput, result *ValidationResult
 			Field:   "ncf",
 			Code:    "ncf_invalid_format",
 			Message: "NCF debe comenzar con B o E seguido de 10-12 dígitos",
+		})
+		return
+	}
+
+	// Validate NCF type (first 3 chars after B/E)
+	// B01=Crédito Fiscal, B02=Consumidor Final, B04=Nota Crédito,
+	// B14=Régimen Especial, B15=Gubernamental, B16=Exportación
+	tipoNCF := input.NCF[0:3]
+	validTypes := map[string]string{
+		"B01": "Factura Crédito Fiscal",
+		"B02": "Factura Consumidor Final",
+		"B04": "Nota de Crédito",
+		"B14": "Régimen Especial",
+		"B15": "Gubernamental",
+		"B16": "Exportación",
+		"E31": "Factura Electrónica",
+		"E32": "Nota Débito Electrónica",
+		"E33": "Nota Crédito Electrónica",
+		"E34": "Compras Electrónicas",
+		"E41": "Comprobante Compras",
+		"E43": "Gastos Menores",
+		"E44": "Regímenes Especiales",
+		"E45": "Gubernamental",
+	}
+	if _, valid := validTypes[tipoNCF]; !valid {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "ncf",
+			Code:    "ncf_unknown_type",
+			Message: "Tipo de NCF no reconocido: " + tipoNCF,
 		})
 	}
 
@@ -273,7 +309,7 @@ func (v *TaxValidator) validateRetenciones(input *InvoiceInput, result *Validati
 		})
 	}
 
-	// If ISR retention exists, type is required (1-8)
+	// If ISR retention exists, type is required (1-8) and validate rate
 	if input.RetencionISRMonto > 0 {
 		if input.RetencionISRTipo < 1 || input.RetencionISRTipo > 8 {
 			result.Errors = append(result.Errors, ValidationError{
@@ -281,7 +317,51 @@ func (v *TaxValidator) validateRetenciones(input *InvoiceInput, result *Validati
 				Code:    "missing_retencion_tipo",
 				Message: "Tipo de retención ISR requerido (1-8)",
 			})
+		} else {
+			// Validate ISR rate by type
+			v.validateISRRate(input, result)
 		}
+	}
+}
+
+// validateISRRate checks ISR retention matches expected rate by type
+func (v *TaxValidator) validateISRRate(input *InvoiceInput, result *ValidationResult) {
+	// ISR retention rates by type (DGII)
+	// 1=Alquileres (10%), 2=Honorarios (10%), 3=Comisiones (10%)
+	// 4=Intereses (10%), 5=Dividendos (10%), 6=Premios (25%)
+	// 7=Transferencias (27%), 8=Otros (10%)
+	isrRates := map[int]float64{
+		1: 0.10, // Alquileres
+		2: 0.10, // Honorarios profesionales
+		3: 0.10, // Comisiones
+		4: 0.10, // Intereses pagados a personas físicas
+		5: 0.10, // Dividendos
+		6: 0.25, // Premios
+		7: 0.27, // Transferencias inmobiliarias
+		8: 0.10, // Otros
+	}
+
+	expectedRate, exists := isrRates[input.RetencionISRTipo]
+	if !exists {
+		return
+	}
+
+	// Calculate base for ISR (usually subtotal - descuento)
+	baseISR := input.MontoServicios + input.MontoBienes - input.Descuento
+	if baseISR <= 0 {
+		return
+	}
+
+	expectedISR := baseISR * expectedRate
+	diff := math.Abs(input.RetencionISRMonto - expectedISR)
+	toleranceAmount := expectedISR * v.tolerance
+
+	if diff > toleranceAmount && expectedISR > 0 {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "retencion_isr_monto",
+			Code:    "isr_rate_mismatch",
+			Message: "Retención ISR no coincide con tasa esperada para tipo " + string(rune('0'+input.RetencionISRTipo)),
+		})
 	}
 }
 
