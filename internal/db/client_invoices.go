@@ -40,6 +40,7 @@ type ClientInvoice struct {
 	ISR             float64 `json:"isr"`
 	RetencionISRTipo *int   `json:"retencion_isr_tipo,omitempty"` // Codigo 1-8
 	ISC             float64 `json:"isc"`                         // Impuesto Selectivo al Consumo
+	ISCCategoria    string  `json:"isc_categoria,omitempty"`     // seguros|telecom|alcohol|tabaco|vehiculos
 	CDTMonto        float64 `json:"cdt_monto"`                   // Contribucion Desarrollo Telecom
 	Cargo911        float64 `json:"cargo_911"`                   // Contribucion al 911
 	Propina         float64 `json:"propina"`
@@ -80,7 +81,7 @@ func GetClientInvoices(ctx context.Context, clienteID string, limit int) ([]Clie
 		       COALESCE(emisor_rnc, ''), COALESCE(receptor_nombre, ''), COALESCE(receptor_rnc, ''),
 		       COALESCE(subtotal, 0), COALESCE(descuento, 0), COALESCE(itbis, 0), COALESCE(itbis_retenido, 0),
 		       COALESCE(itbis_exento, 0), COALESCE(itbis_proporcionalidad, 0), COALESCE(itbis_costo, 0),
-		       COALESCE(isr, 0), retencion_isr_tipo, COALESCE(isc, 0),
+		       COALESCE(isr, 0), retencion_isr_tipo, COALESCE(isc, 0), COALESCE(isc_categoria, ''),
 		       COALESCE(cdt_monto, 0), COALESCE(cargo_911, 0), COALESCE(propina, 0),
 		       COALESCE(otros_impuestos, 0), COALESCE(monto_no_facturable, 0), ncf_vencimiento,
 		       COALESCE(forma_pago, ''), COALESCE(tipo_ncf, ''), COALESCE(tipo_bien_servicio, ''),
@@ -109,7 +110,7 @@ func GetClientInvoices(ctx context.Context, clienteID string, limit int) ([]Clie
 			&inv.EmisorRNC, &inv.ReceptorNombre, &inv.ReceptorRNC,
 			&inv.Subtotal, &inv.Descuento, &inv.ITBIS, &inv.ITBISRetenido,
 			&inv.ITBISExento, &inv.ITBISProporcionalidad, &inv.ITBISCosto,
-			&inv.ISR, &inv.RetencionISRTipo, &inv.ISC,
+			&inv.ISR, &inv.RetencionISRTipo, &inv.ISC, &inv.ISCCategoria,
 			&inv.CDTMonto, &inv.Cargo911, &inv.Propina,
 			&inv.OtrosImpuestos, &inv.MontoNoFacturable, &inv.NCFVencimiento,
 			&inv.FormaPago, &inv.TipoNCF, &inv.TipoBienServicio,
@@ -146,7 +147,7 @@ func GetClientInvoicesPaginated(ctx context.Context, clienteID string, limit, of
 		       COALESCE(emisor_rnc, ''), COALESCE(receptor_nombre, ''), COALESCE(receptor_rnc, ''),
 		       COALESCE(subtotal, 0), COALESCE(descuento, 0), COALESCE(itbis, 0), COALESCE(itbis_retenido, 0),
 		       COALESCE(itbis_exento, 0), COALESCE(itbis_proporcionalidad, 0), COALESCE(itbis_costo, 0),
-		       COALESCE(isr, 0), retencion_isr_tipo, COALESCE(isc, 0),
+		       COALESCE(isr, 0), retencion_isr_tipo, COALESCE(isc, 0), COALESCE(isc_categoria, ''),
 		       COALESCE(cdt_monto, 0), COALESCE(cargo_911, 0), COALESCE(propina, 0),
 		       COALESCE(otros_impuestos, 0), COALESCE(monto_no_facturable, 0), ncf_vencimiento,
 		       COALESCE(forma_pago, ''), COALESCE(tipo_ncf, ''), COALESCE(tipo_bien_servicio, ''),
@@ -175,7 +176,7 @@ func GetClientInvoicesPaginated(ctx context.Context, clienteID string, limit, of
 			&inv.EmisorRNC, &inv.ReceptorNombre, &inv.ReceptorRNC,
 			&inv.Subtotal, &inv.Descuento, &inv.ITBIS, &inv.ITBISRetenido,
 			&inv.ITBISExento, &inv.ITBISProporcionalidad, &inv.ITBISCosto,
-			&inv.ISR, &inv.RetencionISRTipo, &inv.ISC,
+			&inv.ISR, &inv.RetencionISRTipo, &inv.ISC, &inv.ISCCategoria,
 			&inv.CDTMonto, &inv.Cargo911, &inv.Propina,
 			&inv.OtrosImpuestos, &inv.MontoNoFacturable, &inv.NCFVencimiento,
 			&inv.FormaPago, &inv.TipoNCF, &inv.TipoBienServicio,
@@ -261,7 +262,7 @@ func GetClientInvoiceByID(ctx context.Context, clienteID, invoiceID string) (*Cl
 		       COALESCE(emisor_rnc, ''), COALESCE(receptor_nombre, ''), COALESCE(receptor_rnc, ''),
 		       COALESCE(subtotal, 0), COALESCE(descuento, 0), COALESCE(itbis, 0), COALESCE(itbis_retenido, 0),
 		       COALESCE(itbis_exento, 0), COALESCE(itbis_proporcionalidad, 0), COALESCE(itbis_costo, 0),
-		       COALESCE(isr, 0), retencion_isr_tipo, COALESCE(isc, 0),
+		       COALESCE(isr, 0), retencion_isr_tipo, COALESCE(isc, 0), COALESCE(isc_categoria, ''),
 		       COALESCE(cdt_monto, 0), COALESCE(cargo_911, 0), COALESCE(propina, 0),
 		       COALESCE(otros_impuestos, 0), COALESCE(monto_no_facturable, 0), ncf_vencimiento,
 		       COALESCE(forma_pago, ''), COALESCE(tipo_ncf, ''), COALESCE(tipo_bien_servicio, ''),
@@ -307,7 +308,7 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 			emisor_rnc, receptor_nombre, receptor_rnc,
 			subtotal, descuento, itbis, itbis_retenido,
 			itbis_exento, itbis_proporcionalidad, itbis_costo,
-			isr, retencion_isr_tipo, isc,
+			isr, retencion_isr_tipo, isc, isc_categoria,
 			cdt_monto, cargo_911, propina, otros_impuestos, monto_no_facturable, ncf_vencimiento,
 			forma_pago, tipo_ncf, tipo_bien_servicio,
 			confidence_score, raw_ocr_json, items_json,
@@ -316,11 +317,11 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 			$1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
 			$12, $13, $14, $15, $16, $17, $18,
 			$19, $20, $21,
-			$22, $23, $24,
-			$25, $26, $27, $28, $29, $30,
-			$31, $32, $33,
-			$34, $35::jsonb, $36::jsonb,
-			$37, $38
+			$22, $23, $24, $25,
+			$26, $27, $28, $29, $30, $31,
+			$32, $33, $34,
+			$35, $36::jsonb, $37::jsonb,
+			$38, $39
 		)
 		RETURNING id, created_at
 	`
@@ -341,7 +342,7 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 		inv.EmisorRNC, inv.ReceptorNombre, inv.ReceptorRNC,
 		inv.Subtotal, inv.Descuento, inv.ITBIS, inv.ITBISRetenido,
 		inv.ITBISExento, inv.ITBISProporcionalidad, inv.ITBISCosto,
-		inv.ISR, inv.RetencionISRTipo, inv.ISC,
+		inv.ISR, inv.RetencionISRTipo, inv.ISC, inv.ISCCategoria,
 		inv.CDTMonto, inv.Cargo911, inv.Propina, inv.OtrosImpuestos, inv.MontoNoFacturable, inv.NCFVencimiento,
 		inv.FormaPago, inv.TipoNCF, inv.TipoBienServicio,
 		inv.ConfidenceScore, rawJSON, itemsJSON,

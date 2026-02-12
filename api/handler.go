@@ -422,12 +422,28 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			EmisorRNC:        invoice.RNCEmisor,
 			ReceptorNombre:   invoice.NombreReceptor,
 			ReceptorRNC:      invoice.RNCReceptor,
-			Subtotal:         decimalToFloat64(invoice.Subtotal),
-			ITBIS:            decimalToFloat64(invoice.ITBIS),
-			ITBISRetenido:    decimalToFloat64(invoice.ITBISRetenido),
+			// Montos base
+			Subtotal:  decimalToFloat64(invoice.Subtotal),
+			Descuento: decimalToFloat64(invoice.Descuento),
+			// ITBIS
+			ITBIS:                 decimalToFloat64(invoice.ITBIS),
+			ITBISRetenido:         decimalToFloat64(invoice.ITBISRetenido),
+			ITBISExento:           decimalToFloat64(invoice.ITBISExento),
+			ITBISProporcionalidad: decimalToFloat64(invoice.ITBISProporcionalidad),
+			ITBISCosto:            decimalToFloat64(invoice.ITBISCosto),
+			// ISR
 			ISR:              decimalToFloat64(invoice.ISR),
-			Propina:          decimalToFloat64(invoice.Propina),
-			OtrosImpuestos:   decimalToFloat64(invoice.OtrosImpuestos),
+			RetencionISRTipo: intToPtr(invoice.RetencionISRTipo),
+			// ISC
+			ISC:          decimalToFloat64(invoice.ISC),
+			ISCCategoria: invoice.ISCCategoria,
+			// Otros cargos
+			CDTMonto:          decimalToFloat64(invoice.CDTMonto),
+			Cargo911:          decimalToFloat64(invoice.Cargo911),
+			Propina:           decimalToFloat64(invoice.Propina),
+			OtrosImpuestos:    decimalToFloat64(invoice.OtrosImpuestos),
+			MontoNoFacturable: decimalToFloat64(invoice.MontoNoFacturable),
+			// Clasificación
 			FormaPago:        invoice.FormaPago,
 			TipoNCF:          invoice.TipoNCF,
 			TipoBienServicio: invoice.TipoBienServicio,
@@ -445,7 +461,7 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build data object with 13 campos fiscales
+	// Build data object with campos fiscales DGII completos
 	dataMap := map[string]interface{}{
 		// Identificación
 		"ncf":              invoice.NCF,
@@ -457,28 +473,32 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		// Montos base
 		"monto_servicios":  decimalToFloat64(invoice.Subtotal),
 		"monto_bienes":     0,
-		"descuento":        0,
+		"descuento":        decimalToFloat64(invoice.Descuento),
 
 		// ITBIS
-		"itbis_facturado":       decimalToFloat64(invoice.ITBIS),
-		"itbis_exento":          0,
-		"itbis_proporcionalidad": 0,
-		"itbis_costo":           0,
-		"itbis_retenido":        decimalToFloat64(invoice.ITBISRetenido),
+		"itbis_facturado":        decimalToFloat64(invoice.ITBIS),
+		"itbis_tasa":             decimalToFloat64(invoice.ITBISTasa),
+		"itbis_exento":           decimalToFloat64(invoice.ITBISExento),
+		"itbis_proporcionalidad": decimalToFloat64(invoice.ITBISProporcionalidad),
+		"itbis_costo":            decimalToFloat64(invoice.ITBISCosto),
+		"itbis_retenido":         decimalToFloat64(invoice.ITBISRetenido),
 
-		// ISC y otros
-		"isc_monto":             0,
-		"cdt_monto":             0,
-		"cargo_911":             0,
-		"propina_legal":         decimalToFloat64(invoice.Propina),
-		"monto_no_facturable":   0,
+		// ISC
+		"isc_monto":     decimalToFloat64(invoice.ISC),
+		"isc_categoria": invoice.ISCCategoria,
+
+		// Otros cargos
+		"cdt_monto":           decimalToFloat64(invoice.CDTMonto),
+		"cargo_911":           decimalToFloat64(invoice.Cargo911),
+		"propina_legal":       decimalToFloat64(invoice.Propina),
+		"otros_impuestos":     decimalToFloat64(invoice.OtrosImpuestos),
+		"monto_no_facturable": decimalToFloat64(invoice.MontoNoFacturable),
 
 		// Retenciones ISR
-		"retencion_isr_tipo":  nil,
+		"retencion_isr_tipo":  invoice.RetencionISRTipo,
 		"retencion_isr_monto": decimalToFloat64(invoice.ISR),
 
-		// Otros
-		"otros_impuestos":  decimalToFloat64(invoice.OtrosImpuestos),
+		// Total
 		"total_factura":    decimalToFloat64(invoice.Total),
 
 		// Metadata
@@ -826,6 +846,13 @@ func (h *Handler) sendError(w http.ResponseWriter, statusCode int, message strin
 func decimalToFloat64(d decimal.Decimal) float64 {
 	f, _ := d.Float64()
 	return f
+}
+
+func intToPtr(i int) *int {
+	if i == 0 {
+		return nil
+	}
+	return &i
 }
 
 // ValidateInvoiceTaxes validates tax fields from OCR/AI extraction
