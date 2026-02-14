@@ -281,7 +281,7 @@ func GetClientInvoiceByID(ctx context.Context, clienteID, invoiceID string) (*Cl
 		&inv.EmisorRNC, &inv.ReceptorNombre, &inv.ReceptorRNC,
 		&inv.Subtotal, &inv.Descuento, &inv.ITBIS, &inv.ITBISRetenido,
 		&inv.ITBISExento, &inv.ITBISProporcionalidad, &inv.ITBISCosto,
-		&inv.ISR, &inv.RetencionISRTipo, &inv.ISC,
+		&inv.ISR, &inv.RetencionISRTipo, &inv.ISC, &inv.ISCCategoria,
 		&inv.CDTMonto, &inv.Cargo911, &inv.Propina,
 		&inv.OtrosImpuestos, &inv.MontoNoFacturable, &inv.NCFVencimiento,
 		&inv.FormaPago, &inv.TipoNCF, &inv.TipoBienServicio,
@@ -360,5 +360,74 @@ func DeleteClientInvoice(ctx context.Context, clienteID, invoiceID string) error
 
 	query := `DELETE FROM facturas_clientes WHERE cliente_id = $1::uuid AND id = $2::uuid`
 	_, err := Pool.Exec(ctx, query, clienteID, invoiceID)
+	return err
+}
+
+// UpdateClientInvoice - Actualizar campos extraídos de una factura (reprocesamiento)
+func UpdateClientInvoice(ctx context.Context, clienteID, invoiceID string, inv *ClientInvoice) error {
+	if Pool == nil {
+		return ErrNoDatabase
+	}
+
+	query := `
+		UPDATE facturas_clientes SET
+			ncf = $3,
+			tipo_ncf = $4,
+			emisor_rnc = $5,
+			proveedor = $6,
+			receptor_nombre = $7,
+			receptor_rnc = $8,
+			fecha_documento = $9,
+			monto = $10,
+			subtotal = $11,
+			descuento = $12,
+			itbis = $13,
+			itbis_retenido = $14,
+			itbis_exento = $15,
+			itbis_proporcionalidad = $16,
+			itbis_costo = $17,
+			isr = $18,
+			retencion_isr_tipo = $19,
+			isc = $20,
+			isc_categoria = $21,
+			cdt_monto = $22,
+			cargo_911 = $23,
+			propina = $24,
+			otros_impuestos = $25,
+			monto_no_facturable = $26,
+			forma_pago = $27,
+			tipo_bien_servicio = $28,
+			confidence_score = $29,
+			raw_ocr_json = $30::jsonb,
+			items_json = $31::jsonb,
+			extraction_status = $32,
+			review_notes = $33,
+			estado = $34
+		WHERE cliente_id = $1::uuid AND id = $2::uuid
+	`
+
+	// Handle nullable JSONB
+	var rawJSON, itemsJSON interface{}
+	if inv.RawOCRJSON != "" {
+		rawJSON = inv.RawOCRJSON
+	}
+	if inv.ItemsJSON != "" {
+		itemsJSON = inv.ItemsJSON
+	}
+
+	_, err := Pool.Exec(ctx, query,
+		clienteID, invoiceID,
+		inv.NCF, inv.TipoNCF, inv.EmisorRNC, inv.Proveedor,
+		inv.ReceptorNombre, inv.ReceptorRNC, inv.FechaDocumento, inv.Monto,
+		inv.Subtotal, inv.Descuento,
+		inv.ITBIS, inv.ITBISRetenido, inv.ITBISExento, inv.ITBISProporcionalidad, inv.ITBISCosto,
+		inv.ISR, inv.RetencionISRTipo,
+		inv.ISC, inv.ISCCategoria,
+		inv.CDTMonto, inv.Cargo911, inv.Propina, inv.OtrosImpuestos, inv.MontoNoFacturable,
+		inv.FormaPago, inv.TipoBienServicio,
+		inv.ConfidenceScore, rawJSON, itemsJSON,
+		inv.ExtractionStatus, inv.ReviewNotes, inv.Estado,
+	)
+
 	return err
 }

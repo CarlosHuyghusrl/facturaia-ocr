@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 
@@ -211,14 +212,128 @@ func (h *Handler) ReprocesarClientInvoice(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// TODO: Re-download image from MinIO and reprocess with AI
-	// For now, return the existing invoice
-	fmt.Printf("[Reprocesar] Invoice %s requested reprocesamiento\n", invoiceID)
+	// Download image from MinIO
+	if storage.Client == nil {
+		h.sendError(w, http.StatusServiceUnavailable, "storage not available")
+		return
+	}
+
+	// Remove bucket prefix to get object name
+	objectName := invoice.ArchivoURL
+	prefix := storage.BucketName + "/"
+	if strings.HasPrefix(objectName, prefix) {
+		objectName = objectName[len(prefix):]
+	}
+
+	obj, err := storage.Client.GetObject(r.Context(), storage.BucketName, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		log.Printf("ReprocesarClientInvoice: MinIO error: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "failed to retrieve image from storage")
+		return
+	}
+	defer obj.Close()
+
+	// Read image bytes
+	imageData, err := io.ReadAll(obj)
+	if err != nil {
+		log.Printf("ReprocesarClientInvoice: Read error: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "failed to read image")
+		return
+	}
+
+	// Reprocess with AI
+	fmt.Printf("[Reprocesar] Reprocesando factura %s con AI\n", invoiceID)
+	reprocessedInvoice, _, _, _, err := h.processInvoice(
+		imageData,
+		true, // useVisionModel
+		h.config.AI.DefaultProvider,
+		"",
+		h.config.OCR.Language,
+	)
+
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "OCR reprocessing failed: "+err.Error())
+		return
+	}
+
+	// Parse fecha
+	var fechaDoc *time.Time
+	if !reprocessedInvoice.FechaFactura.IsZero() {
+		t := reprocessedInvoice.FechaFactura
+		fechaDoc = &t
+	} else if !reprocessedInvoice.Date.IsZero() {
+		t := reprocessedInvoice.Date
+		fechaDoc = &t
+	}
+
+	// Build OCR notes summary
+	ocrNotes := ""
+	if ocrJSON, err := json.Marshal(reprocessedInvoice); err == nil {
+		ocrNotes = string(ocrJSON)
+	}
+
+	// Serialize items to JSON
+	itemsJSON := ""
+	if len(reprocessedInvoice.Items) > 0 {
+		if ij, err := json.Marshal(reprocessedInvoice.Items); err == nil {
+			itemsJSON = string(ij)
+		}
+	}
+
+	// Build updated invoice
+	updatedInvoice := &db.ClientInvoice{
+		NCF:              reprocessedInvoice.NCF,
+		TipoNCF:          reprocessedInvoice.TipoNCF,
+		EmisorRNC:        reprocessedInvoice.RNCEmisor,
+		Proveedor:        reprocessedInvoice.NombreEmisor,
+		ReceptorNombre:   reprocessedInvoice.NombreReceptor,
+		ReceptorRNC:      reprocessedInvoice.RNCReceptor,
+		FechaDocumento:   fechaDoc,
+		Monto:            decimalToFloat64(reprocessedInvoice.Total),
+		Subtotal:         decimalToFloat64(reprocessedInvoice.Subtotal),
+		Descuento:        decimalToFloat64(reprocessedInvoice.Descuento),
+		ITBIS:            decimalToFloat64(reprocessedInvoice.ITBIS),
+		ITBISRetenido:    decimalToFloat64(reprocessedInvoice.ITBISRetenido),
+		ITBISExento:      decimalToFloat64(reprocessedInvoice.ITBISExento),
+		ITBISProporcionalidad: decimalToFloat64(reprocessedInvoice.ITBISProporcionalidad),
+		ITBISCosto:       decimalToFloat64(reprocessedInvoice.ITBISCosto),
+		ISR:              decimalToFloat64(reprocessedInvoice.ISR),
+		RetencionISRTipo: intToPtr(reprocessedInvoice.RetencionISRTipo),
+		ISC:              decimalToFloat64(reprocessedInvoice.ISC),
+		ISCCategoria:     reprocessedInvoice.ISCCategoria,
+		CDTMonto:         decimalToFloat64(reprocessedInvoice.CDTMonto),
+		Cargo911:         decimalToFloat64(reprocessedInvoice.Cargo911),
+		Propina:          decimalToFloat64(reprocessedInvoice.Propina),
+		OtrosImpuestos:   decimalToFloat64(reprocessedInvoice.OtrosImpuestos),
+		MontoNoFacturable: decimalToFloat64(reprocessedInvoice.MontoNoFacturable),
+		FormaPago:        reprocessedInvoice.FormaPago,
+		TipoBienServicio: reprocessedInvoice.TipoBienServicio,
+		ConfidenceScore:  reprocessedInvoice.Confidence,
+		RawOCRJSON:       ocrNotes,
+		ItemsJSON:        itemsJSON,
+		ExtractionStatus: "validated",
+		ReviewNotes:      "",
+		Estado:           "procesado",
+	}
+
+	// Update in database
+	if err := db.UpdateClientInvoice(r.Context(), claims.UserID, invoiceID, updatedInvoice); err != nil {
+		log.Printf("ReprocesarClientInvoice: DB update error: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "failed to update invoice in database")
+		return
+	}
+
+	// Get updated invoice to return
+	finalInvoice, err := db.GetClientInvoiceByID(r.Context(), claims.UserID, invoiceID)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "failed to retrieve updated invoice")
+		return
+	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"factura": clientInvoiceToFrontend(invoice),
-		"message": "factura reprocesada",
+		"factura": clientInvoiceToFrontend(finalInvoice),
+		"message": "factura reprocesada exitosamente",
 	})
 }
 
