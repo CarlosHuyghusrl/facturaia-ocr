@@ -55,6 +55,16 @@ type ClientInvoice struct {
 	ItemsJSON        string  `json:"items_json,omitempty"`
 	ExtractionStatus string  `json:"extraction_status,omitempty"` // validated, review, error
 	ReviewNotes      string  `json:"review_notes,omitempty"`      // Validation errors/warnings JSON
+
+	// Campos DGII nuevos
+	ITBISTasa               float64    `json:"itbis_tasa"`
+	FechaPago               *time.Time `json:"fecha_pago,omitempty"`
+	NCFModifica             string     `json:"ncf_modifica,omitempty"`
+	TipoIDEmisor            string     `json:"tipo_id_emisor,omitempty"`
+	TipoIDReceptor          string     `json:"tipo_id_receptor,omitempty"`
+	MontoServicios          float64    `json:"monto_servicios"`
+	MontoBienes             float64    `json:"monto_bienes"`
+	ITBISRetenidoPorcentaje int        `json:"itbis_retenido_porcentaje"`
 }
 
 // ClientStats - Estadisticas para clientes
@@ -85,7 +95,11 @@ func GetClientInvoices(ctx context.Context, clienteID string, limit int) ([]Clie
 		       COALESCE(cdt_monto, 0), COALESCE(cargo_911, 0), COALESCE(propina, 0),
 		       COALESCE(otros_impuestos, 0), COALESCE(monto_no_facturable, 0), ncf_vencimiento,
 		       COALESCE(forma_pago, ''), COALESCE(tipo_ncf, ''), COALESCE(tipo_bien_servicio, ''),
-		       COALESCE(confidence_score, 0)
+		       COALESCE(confidence_score, 0),
+		       COALESCE(itbis_tasa, 18), fecha_pago, COALESCE(ncf_modifica, ''),
+		       COALESCE(tipo_id_emisor, '1'), COALESCE(tipo_id_receptor, '1'),
+		       COALESCE(monto_servicios, 0), COALESCE(monto_bienes, 0),
+		       COALESCE(itbis_retenido_porcentaje, 0)
 		FROM facturas_clientes
 		WHERE cliente_id = $1::uuid
 		ORDER BY created_at DESC
@@ -115,6 +129,10 @@ func GetClientInvoices(ctx context.Context, clienteID string, limit int) ([]Clie
 			&inv.OtrosImpuestos, &inv.MontoNoFacturable, &inv.NCFVencimiento,
 			&inv.FormaPago, &inv.TipoNCF, &inv.TipoBienServicio,
 			&inv.ConfidenceScore,
+			&inv.ITBISTasa, &inv.FechaPago, &inv.NCFModifica,
+			&inv.TipoIDEmisor, &inv.TipoIDReceptor,
+			&inv.MontoServicios, &inv.MontoBienes,
+			&inv.ITBISRetenidoPorcentaje,
 		)
 		if err != nil {
 			return nil, err
@@ -151,7 +169,11 @@ func GetClientInvoicesPaginated(ctx context.Context, clienteID string, limit, of
 		       COALESCE(cdt_monto, 0), COALESCE(cargo_911, 0), COALESCE(propina, 0),
 		       COALESCE(otros_impuestos, 0), COALESCE(monto_no_facturable, 0), ncf_vencimiento,
 		       COALESCE(forma_pago, ''), COALESCE(tipo_ncf, ''), COALESCE(tipo_bien_servicio, ''),
-		       COALESCE(confidence_score, 0)
+		       COALESCE(confidence_score, 0),
+		       COALESCE(itbis_tasa, 18), fecha_pago, COALESCE(ncf_modifica, ''),
+		       COALESCE(tipo_id_emisor, '1'), COALESCE(tipo_id_receptor, '1'),
+		       COALESCE(monto_servicios, 0), COALESCE(monto_bienes, 0),
+		       COALESCE(itbis_retenido_porcentaje, 0)
 		FROM facturas_clientes
 		WHERE cliente_id = $1::uuid
 		ORDER BY created_at DESC
@@ -181,6 +203,10 @@ func GetClientInvoicesPaginated(ctx context.Context, clienteID string, limit, of
 			&inv.OtrosImpuestos, &inv.MontoNoFacturable, &inv.NCFVencimiento,
 			&inv.FormaPago, &inv.TipoNCF, &inv.TipoBienServicio,
 			&inv.ConfidenceScore,
+			&inv.ITBISTasa, &inv.FechaPago, &inv.NCFModifica,
+			&inv.TipoIDEmisor, &inv.TipoIDReceptor,
+			&inv.MontoServicios, &inv.MontoBienes,
+			&inv.ITBISRetenidoPorcentaje,
 		)
 		if err != nil {
 			return nil, 0, err
@@ -266,7 +292,11 @@ func GetClientInvoiceByID(ctx context.Context, clienteID, invoiceID string) (*Cl
 		       COALESCE(cdt_monto, 0), COALESCE(cargo_911, 0), COALESCE(propina, 0),
 		       COALESCE(otros_impuestos, 0), COALESCE(monto_no_facturable, 0), ncf_vencimiento,
 		       COALESCE(forma_pago, ''), COALESCE(tipo_ncf, ''), COALESCE(tipo_bien_servicio, ''),
-		       COALESCE(confidence_score, 0)
+		       COALESCE(confidence_score, 0),
+		       COALESCE(itbis_tasa, 18), fecha_pago, COALESCE(ncf_modifica, ''),
+		       COALESCE(tipo_id_emisor, '1'), COALESCE(tipo_id_receptor, '1'),
+		       COALESCE(monto_servicios, 0), COALESCE(monto_bienes, 0),
+		       COALESCE(itbis_retenido_porcentaje, 0)
 		FROM facturas_clientes
 		WHERE cliente_id = $1::uuid AND id = $2::uuid
 	`
@@ -286,6 +316,10 @@ func GetClientInvoiceByID(ctx context.Context, clienteID, invoiceID string) (*Cl
 		&inv.OtrosImpuestos, &inv.MontoNoFacturable, &inv.NCFVencimiento,
 		&inv.FormaPago, &inv.TipoNCF, &inv.TipoBienServicio,
 		&inv.ConfidenceScore,
+		&inv.ITBISTasa, &inv.FechaPago, &inv.NCFModifica,
+		&inv.TipoIDEmisor, &inv.TipoIDReceptor,
+		&inv.MontoServicios, &inv.MontoBienes,
+		&inv.ITBISRetenidoPorcentaje,
 	)
 	if err != nil {
 		return nil, err
@@ -312,7 +346,9 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 			cdt_monto, cargo_911, propina, otros_impuestos, monto_no_facturable, ncf_vencimiento,
 			forma_pago, tipo_ncf, tipo_bien_servicio,
 			confidence_score, raw_ocr_json, items_json,
-			extraction_status, review_notes
+			extraction_status, review_notes,
+			itbis_tasa, fecha_pago, ncf_modifica, tipo_id_emisor, tipo_id_receptor,
+			monto_servicios, monto_bienes, itbis_retenido_porcentaje
 		) VALUES (
 			$1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
 			$12, $13, $14, $15, $16, $17, $18,
@@ -321,7 +357,9 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 			$26, $27, $28, $29, $30, $31,
 			$32, $33, $34,
 			$35, $36::jsonb, $37::jsonb,
-			$38, $39
+			$38, $39,
+			$40, $41, $42, $43, $44,
+			$45, $46, $47
 		)
 		RETURNING id, created_at
 	`
@@ -347,6 +385,8 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 		inv.FormaPago, inv.TipoNCF, inv.TipoBienServicio,
 		inv.ConfidenceScore, rawJSON, itemsJSON,
 		inv.ExtractionStatus, inv.ReviewNotes,
+		inv.ITBISTasa, inv.FechaPago, inv.NCFModifica, inv.TipoIDEmisor, inv.TipoIDReceptor,
+		inv.MontoServicios, inv.MontoBienes, inv.ITBISRetenidoPorcentaje,
 	).Scan(&inv.ID, &inv.CreatedAt)
 
 	return err
@@ -402,7 +442,15 @@ func UpdateClientInvoice(ctx context.Context, clienteID, invoiceID string, inv *
 			items_json = $31::jsonb,
 			extraction_status = $32,
 			review_notes = $33,
-			estado = $34
+			estado = $34,
+			itbis_tasa = $35,
+			fecha_pago = $36,
+			ncf_modifica = $37,
+			tipo_id_emisor = $38,
+			tipo_id_receptor = $39,
+			monto_servicios = $40,
+			monto_bienes = $41,
+			itbis_retenido_porcentaje = $42
 		WHERE cliente_id = $1::uuid AND id = $2::uuid
 	`
 
@@ -427,6 +475,8 @@ func UpdateClientInvoice(ctx context.Context, clienteID, invoiceID string, inv *
 		inv.FormaPago, inv.TipoBienServicio,
 		inv.ConfidenceScore, rawJSON, itemsJSON,
 		inv.ExtractionStatus, inv.ReviewNotes, inv.Estado,
+		inv.ITBISTasa, inv.FechaPago, inv.NCFModifica, inv.TipoIDEmisor, inv.TipoIDReceptor,
+		inv.MontoServicios, inv.MontoBienes, inv.ITBISRetenidoPorcentaje,
 	)
 
 	return err
