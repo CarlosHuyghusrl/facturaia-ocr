@@ -338,27 +338,53 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// === PASO: Validación cruzada de impuestos ===
+
+	// Calcular montoServicios/montoBienes con fallback al subtotal
+	montoServicios := decimalToFloat64(invoice.MontoServicios)
+	montoBienes := decimalToFloat64(invoice.MontoBienes)
+	// Fallback: si la IA no separó servicios/bienes, usar subtotal
+	if montoServicios == 0 && montoBienes == 0 {
+		montoServicios = decimalToFloat64(invoice.Subtotal)
+	}
+
+	// FechaPago: solo si no es zero
+	fechaPagoStr := ""
+	if !invoice.FechaPago.IsZero() {
+		fechaPagoStr = invoice.FechaPago.Format("2006-01-02")
+	}
+
+	// NCFVencimiento: solo si no es zero
+	ncfVencimientoStr := ""
+	if !invoice.FechaVencimiento.IsZero() {
+		ncfVencimientoStr = invoice.FechaVencimiento.Format("2006-01-02")
+	}
+
 	validationInput := &services.InvoiceInput{
-		MontoServicios:        decimalToFloat64(invoice.Subtotal),
-		MontoBienes:           0,
-		Descuento:             decimalToFloat64(invoice.Descuento),
-		ITBISFacturado:        decimalToFloat64(invoice.ITBIS),
-		ITBISTasa:             decimalToFloat64(invoice.ITBISTasa),
-		ITBISExento:           decimalToFloat64(invoice.ITBISExento),
-		ITBISRetenido:         decimalToFloat64(invoice.ITBISRetenido),
-		ITBISProporcionalidad: decimalToFloat64(invoice.ITBISProporcionalidad),
-		ITBISCosto:            decimalToFloat64(invoice.ITBISCosto),
-		ISCMonto:              decimalToFloat64(invoice.ISC),
-		ISCCategoria:          invoice.ISCCategoria,
-		CDTMonto:              decimalToFloat64(invoice.CDTMonto),
-		Cargo911:              decimalToFloat64(invoice.Cargo911),
-		PropinaLegal:          decimalToFloat64(invoice.Propina),
-		OtrosImpuestos:        decimalToFloat64(invoice.OtrosImpuestos),
-		MontoNoFacturable:     decimalToFloat64(invoice.MontoNoFacturable),
-		RetencionISRTipo:      invoice.RetencionISRTipo,
-		RetencionISRMonto:     decimalToFloat64(invoice.ISR),
-		TotalFactura:          decimalToFloat64(invoice.Total),
-		NCF:                   invoice.NCF,
+		MontoServicios:          montoServicios,
+		MontoBienes:             montoBienes,
+		Descuento:               decimalToFloat64(invoice.Descuento),
+		ITBISFacturado:          decimalToFloat64(invoice.ITBIS),
+		ITBISTasa:               decimalToFloat64(invoice.ITBISTasa),
+		ITBISExento:             decimalToFloat64(invoice.ITBISExento),
+		ITBISRetenido:           decimalToFloat64(invoice.ITBISRetenido),
+		ITBISProporcionalidad:   decimalToFloat64(invoice.ITBISProporcionalidad),
+		ITBISCosto:              decimalToFloat64(invoice.ITBISCosto),
+		ISCMonto:                decimalToFloat64(invoice.ISC),
+		ISCCategoria:            invoice.ISCCategoria,
+		CDTMonto:                decimalToFloat64(invoice.CDTMonto),
+		Cargo911:                decimalToFloat64(invoice.Cargo911),
+		PropinaLegal:            decimalToFloat64(invoice.Propina),
+		OtrosImpuestos:          decimalToFloat64(invoice.OtrosImpuestos),
+		MontoNoFacturable:       decimalToFloat64(invoice.MontoNoFacturable),
+		RetencionISRTipo:        invoice.RetencionISRTipo,
+		RetencionISRMonto:       decimalToFloat64(invoice.ISR),
+		TotalFactura:            decimalToFloat64(invoice.Total),
+		NCF:                     invoice.NCF,
+		NCFModifica:             invoice.NCFModifica,
+		TipoNCF:                 invoice.TipoNCF,
+		ITBISRetenidoPorcentaje: invoice.ITBISRetenidoPorcentaje,
+		FechaPago:               fechaPagoStr,
+		NCFVencimiento:          ncfVencimientoStr,
 	}
 
 	validator := services.NewTaxValidator()
@@ -414,6 +440,13 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			estado = "procesado"
 		}
 
+		// FechaPago para BD
+		var fechaPago *time.Time
+		if !invoice.FechaPago.IsZero() {
+			t := invoice.FechaPago
+			fechaPago = &t
+		}
+
 		clientInvoice := &db.ClientInvoice{
 			ClienteID:        claims.UserID,
 			ArchivoURL:       imagenURL,
@@ -458,6 +491,15 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			ItemsJSON:        itemsJSON,
 			ExtractionStatus: extractionStatus,
 			ReviewNotes:      reviewNotes,
+			// Campos nuevos
+			ITBISTasa:               decimalToFloat64(invoice.ITBISTasa),
+			NCFModifica:             invoice.NCFModifica,
+			TipoIDEmisor:            invoice.TipoIDEmisor,
+			TipoIDReceptor:          invoice.TipoIDReceptor,
+			MontoServicios:          decimalToFloat64(invoice.MontoServicios),
+			MontoBienes:             decimalToFloat64(invoice.MontoBienes),
+			ITBISRetenidoPorcentaje: invoice.ITBISRetenidoPorcentaje,
+			FechaPago:               fechaPago,
 		}
 
 		if err := db.SaveClientInvoice(ctx, clientInvoice); err != nil {
@@ -477,9 +519,11 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		"fecha_documento":  invoice.FechaFactura,
 
 		// Montos base
-		"monto_servicios":  decimalToFloat64(invoice.Subtotal),
-		"monto_bienes":     0,
+		"monto_servicios":  montoServicios,
+		"monto_bienes":     montoBienes,
 		"descuento":        decimalToFloat64(invoice.Descuento),
+		"ncf_modifica":     invoice.NCFModifica,
+		"itbis_retenido_porcentaje": invoice.ITBISRetenidoPorcentaje,
 
 		// ITBIS
 		"itbis_facturado":        decimalToFloat64(invoice.ITBIS),
