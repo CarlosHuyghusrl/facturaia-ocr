@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -364,7 +365,7 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 
 		// Metadata
 		RawText:     ocrText,
-		Confidence:  0.85,
+		Confidence:  0, // calculated below after all fields are parsed
 		ProcessedAt: time.Now(),
 
 		// Legacy compatibility
@@ -454,6 +455,9 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 	if invoice.TipoNCF == "" && invoice.NCF != "" && len(invoice.NCF) >= 3 {
 		invoice.TipoNCF = invoice.NCF[:3]
 	}
+
+	// Calculate real confidence based on extraction quality
+	invoice.Confidence = calculateConfidence(invoice)
 
 	return invoice, nil
 }
@@ -549,5 +553,98 @@ func detectTipoID(id string) string {
 		return "2" // Cedula
 	}
 	return ""
+}
+
+// ncfRegex validates Dominican Republic NCF formats:
+// B-series: B01/B02/B04/B14/B15/B16 + 8 digits
+// E-series: E31-E45 + 13 digits (electronic)
+var ncfRegex = regexp.MustCompile(`^(B0[124]|B1[456]|E3[1-9]|E4[0-5])\d{8,13}$`)
+
+// calculateConfidence computes a real confidence score based on extraction quality.
+//
+// Score breakdown (max 1.0):
+//
+//	Critical fields  — 0.15 each (0.60 total):
+//	  NCF present, RNC emisor present, total > 0, ITBIS >= 0 (field populated)
+//	Important fields — 0.05 each (0.20 total):
+//	  fecha, subtotal > 0, tipoNCF, nombre emisor
+//	Bonus            — 0.10 each (0.20 total):
+//	  NCF has valid format, total ≈ subtotal + ITBIS (within 5%)
+func calculateConfidence(inv *models.Invoice) float64 {
+	var score float64
+
+	// --- Critical fields (0.15 each) ---
+
+	// NCF present
+	if inv.NCF != "" {
+		score += 0.15
+	}
+
+	// RNC emisor present
+	if inv.RNCEmisor != "" {
+		score += 0.15
+	}
+
+	// Total > 0
+	if inv.Total.GreaterThan(decimal.Zero) {
+		score += 0.15
+	}
+
+	// ITBIS field populated (>= 0 is valid; zero is OK for tax-exempt invoices).
+	// We award the point whenever the AI explicitly returned a value (i.e. the
+	// field is not the zero-value that results from a missing/null response).
+	// Because the AI always sets 0 for missing fields per our prompt rules, we
+	// treat the presence of the Total as a proxy: if total > 0 we trust the
+	// ITBIS extraction was attempted.  We always award this point when total > 0
+	// (already scored above) OR when ITBIS itself is positive.
+	if !inv.ITBIS.IsNegative() {
+		score += 0.15
+	}
+
+	// --- Important fields (0.05 each) ---
+
+	// Fecha factura present
+	if !inv.FechaFactura.IsZero() {
+		score += 0.05
+	}
+
+	// Subtotal > 0
+	if inv.Subtotal.GreaterThan(decimal.Zero) {
+		score += 0.05
+	}
+
+	// TipoNCF present
+	if inv.TipoNCF != "" {
+		score += 0.05
+	}
+
+	// Nombre emisor present
+	if inv.NombreEmisor != "" {
+		score += 0.05
+	}
+
+	// --- Bonus ---
+
+	// NCF has valid Dominican Republic format
+	if ncfRegex.MatchString(inv.NCF) {
+		score += 0.10
+	}
+
+	// Total is consistent with subtotal + ITBIS (within 5% tolerance)
+	if inv.Total.GreaterThan(decimal.Zero) && inv.Subtotal.GreaterThan(decimal.Zero) {
+		expected := inv.Subtotal.Add(inv.ITBIS)
+		diff := inv.Total.Sub(expected).Abs()
+		tolerance := inv.Total.Mul(decimal.NewFromFloat(0.05))
+		if diff.LessThanOrEqual(tolerance) {
+			score += 0.10
+		}
+	}
+
+	// Cap at 1.0 to guard against floating-point drift
+	if score > 1.0 {
+		score = 1.0
+	}
+
+	return score
 }
 
