@@ -72,6 +72,13 @@ type InvoiceInput struct {
 	// Total
 	TotalFactura float64 `json:"total_factura"`
 
+	// Nota credito
+	NCFModifica string `json:"ncf_modifica"`
+	TipoNCF     string `json:"tipo_ncf"`
+
+	// ITBIS retencion detalle
+	ITBISRetenidoPorcentaje int `json:"itbis_retenido_porcentaje"` // 30 o 100
+
 	// NCF
 	NCF           string `json:"ncf"`
 	NCFVencimiento string `json:"ncf_vencimiento"` // YYYY-MM-DD
@@ -142,6 +149,21 @@ func (v *TaxValidator) Validate(input *InvoiceInput) *ValidationResult {
 
 	// 7. Validate field coherence
 	v.validateCoherence(input, result)
+
+	// 8. Validate ISC Seguros
+	v.validateISCSeguros(input, result, baseGravada)
+
+	// 9. Validate Nota Credito
+	v.validateNotaCredito(input, result)
+
+	// 10. Validate Exportaciones
+	v.validateExportaciones(input, result)
+
+	// 11. Validate Gubernamentales
+	v.validateGubernamentales(input, result)
+
+	// 12. Validate ITBIS Retenido porcentaje
+	v.validateITBISRetenidoPorcentaje(input, result)
 
 	// Set final status
 	result.Valid = len(result.Errors) == 0
@@ -396,6 +418,80 @@ func (v *TaxValidator) validateCoherence(input *InvoiceInput, result *Validation
 			Field:   "descuento",
 			Code:    "descuento_exceeds_subtotal",
 			Message: "Descuento excede el subtotal",
+		})
+	}
+}
+
+// validateISCSeguros checks ISC is 16% of base gravada for seguros category
+func (v *TaxValidator) validateISCSeguros(input *InvoiceInput, result *ValidationResult, baseGravada float64) {
+	if input.ISCCategoria != "seguros" || baseGravada <= 0 {
+		return
+	}
+	iscEsperado := baseGravada * 0.16
+	diff := math.Abs(input.ISCMonto - iscEsperado)
+	if diff > (iscEsperado * v.tolerance) {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "isc_monto",
+			Code:    "isc_seguros_mismatch",
+			Message: "ISC seguros debería ser 16% de prima neta",
+		})
+	}
+}
+
+// validateNotaCredito checks that credit notes reference the original invoice NCF
+func (v *TaxValidator) validateNotaCredito(input *InvoiceInput, result *ValidationResult) {
+	notaCreditoTypes := map[string]bool{"B04": true, "E32": true, "E33": true}
+	if !notaCreditoTypes[input.TipoNCF] {
+		return
+	}
+	if input.NCFModifica == "" {
+		result.Errors = append(result.Errors, ValidationError{
+			Field:   "ncf_modifica",
+			Code:    "nota_credito_sin_referencia",
+			Message: "Nota de crédito requiere NCF de factura original (ncfModifica)",
+		})
+	}
+}
+
+// validateExportaciones checks that export invoices (B16) do not have ITBIS
+func (v *TaxValidator) validateExportaciones(input *InvoiceInput, result *ValidationResult) {
+	if input.TipoNCF != "B16" {
+		return
+	}
+	if input.ITBISFacturado > 0 {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "itbis_facturado",
+			Code:    "exportacion_con_itbis",
+			Message: "Facturas de exportación (B16) no deben tener ITBIS",
+		})
+	}
+}
+
+// validateGubernamentales checks that governmental invoices (B15/E45) have ITBIS exento
+func (v *TaxValidator) validateGubernamentales(input *InvoiceInput, result *ValidationResult) {
+	gubernamentalTypes := map[string]bool{"B15": true, "E45": true}
+	if !gubernamentalTypes[input.TipoNCF] {
+		return
+	}
+	if input.ITBISExento == 0 && input.ITBISFacturado > 0 {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "itbis_exento",
+			Code:    "gubernamental_sin_exento",
+			Message: "Facturas gubernamentales (B15/E45) generalmente tienen ITBIS exento",
+		})
+	}
+}
+
+// validateITBISRetenidoPorcentaje checks retention percentage is 30 or 100
+func (v *TaxValidator) validateITBISRetenidoPorcentaje(input *InvoiceInput, result *ValidationResult) {
+	if input.ITBISRetenido <= 0 {
+		return
+	}
+	if input.ITBISRetenidoPorcentaje != 30 && input.ITBISRetenidoPorcentaje != 100 {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "itbis_retenido_porcentaje",
+			Code:    "itbis_retenido_porcentaje_invalido",
+			Message: "ITBIS retenido debe ser 30% (gran contribuyente) o 100% (retenedor designado)",
 		})
 	}
 }
