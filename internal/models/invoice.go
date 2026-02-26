@@ -29,16 +29,19 @@ type Invoice struct {
 	FechaPago        time.Time `json:"fechaPago,omitempty"`        // Fecha de pago
 
 	// DGII - Montos Base
-	Subtotal  decimal.Decimal `json:"subtotal,omitempty"`  // Subtotal antes de impuestos
-	Descuento decimal.Decimal `json:"descuento,omitempty"` // Descuento (afecta base imponible ITBIS)
+	Subtotal       decimal.Decimal `json:"subtotal,omitempty"`       // Subtotal antes de impuestos
+	Descuento      decimal.Decimal `json:"descuento,omitempty"`      // Descuento (afecta base imponible ITBIS)
+	MontoServicios decimal.Decimal `json:"montoServicios,omitempty"` // Monto por servicios
+	MontoBienes    decimal.Decimal `json:"montoBienes,omitempty"`    // Monto por bienes
 
 	// DGII - ITBIS (Impuesto Transferencia Bienes y Servicios)
-	ITBIS                 decimal.Decimal `json:"itbis,omitempty"`                 // ITBIS facturado (18% o 16% zona franca)
-	ITBISTasa             decimal.Decimal `json:"itbisTasa,omitempty"`             // Tasa aplicada (18 o 16)
-	ITBISRetenido         decimal.Decimal `json:"itbisRetenido,omitempty"`         // ITBIS retenido (30% o 100%)
-	ITBISExento           decimal.Decimal `json:"itbisExento,omitempty"`           // Monto exento de ITBIS
-	ITBISProporcionalidad decimal.Decimal `json:"itbisProporcionalidad,omitempty"` // Art. 349 - gastos mixtos
-	ITBISCosto            decimal.Decimal `json:"itbisCosto,omitempty"`            // ITBIS no deducible
+	ITBIS                   decimal.Decimal `json:"itbis,omitempty"`                   // ITBIS facturado (18% o 16% zona franca)
+	ITBISTasa               decimal.Decimal `json:"itbisTasa,omitempty"`               // Tasa aplicada (18 o 16)
+	ITBISRetenido           decimal.Decimal `json:"itbisRetenido,omitempty"`           // ITBIS retenido (30% o 100%)
+	ITBISRetenidoPorcentaje int             `json:"itbisRetenidoPorcentaje,omitempty"` // 30 o 100
+	ITBISExento             decimal.Decimal `json:"itbisExento,omitempty"`             // Monto exento de ITBIS
+	ITBISProporcionalidad   decimal.Decimal `json:"itbisProporcionalidad,omitempty"`   // Art. 349 - gastos mixtos
+	ITBISCosto              decimal.Decimal `json:"itbisCosto,omitempty"`              // ITBIS no deducible
 
 	// DGII - ISR (Impuesto Sobre la Renta)
 	ISR              decimal.Decimal `json:"isr,omitempty"`              // ISR retenido

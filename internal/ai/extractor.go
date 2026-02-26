@@ -127,7 +127,8 @@ PASO 4 - EJEMPLO DE TICKET DOMINICANO TIPICO:
 Devuelve SOLO JSON valido (sin markdown, sin comentarios):
 {
   "ncf": "el NCF completo",
-  "tipoNcf": "B01, B02, B15, E31, etc",
+  "tipoNcf": "B01, B02, B04, B15, E31, etc",
+  "ncfModifica": "NCF original que se modifica, OBLIGATORIO si tipoNcf es B04, E32 o E33, null si no aplica",
   "rncEmisor": "solo digitos, sin guiones - del VENDEDOR",
   "nombreEmisor": "nombre de la tienda/empresa que VENDE",
   "tipoIdEmisor": "1=RNC, 2=Cedula",
@@ -136,14 +137,18 @@ Devuelve SOLO JSON valido (sin markdown, sin comentarios):
   "tipoIdReceptor": "1=RNC, 2=Cedula",
   "fechaFactura": "YYYY-MM-DD",
   "fechaVencimiento": "YYYY-MM-DD o null",
+  "fechaPago": "YYYY-MM-DD, requerida si hay retenciones ITBIS o ISR, null si no aplica",
   "subtotal": numero (base antes de impuestos, usa 0 si no aparece),
   "descuento": numero (descuento aplicado, usa 0 si no aparece),
+  "montoServicios": numero (monto de la parte de servicios; si la factura mezcla productos y servicios separar los montos; si solo servicios poner todo aqui; si solo bienes/productos usar 0),
+  "montoBienes": numero (monto de la parte de bienes/productos; si solo bienes poner todo aqui; si solo servicios usar 0),
   "itbis": numero (ITBIS 18%% facturado, usa 0 si no aparece),
   "itbisTasa": numero (18 normal o 16 zona franca, usa 18 por defecto),
-  "itbisRetenido": numero (ITBIS retenido 30%% o 100%%, usa 0 si no aparece),
+  "itbisRetenido": numero (ITBIS retenido, usa 0 si no aparece),
+  "itbisRetenidoPorcentaje": numero (30 si gran contribuyente retiene 30%%, 100 si retenedor designado retiene 100%%, 0 si no hay retencion),
   "itbisExento": numero (monto exento de ITBIS, usa 0 si no aparece),
   "isr": numero (ISR retenido, usa 0 si no aparece),
-  "retencionIsrTipo": numero 1-8 (tipo retencion ISR, usa 0 si no aparece),
+  "retencionIsrTipo": numero 1-8 (tipo retencion ISR segun tabla DGII, usa 0 si no aplica),
   "isc": numero (Impuesto Selectivo al Consumo, usa 0 si no aparece),
   "iscCategoria": "seguros|telecom|alcohol|tabaco|vehiculos|combustibles" o null,
   "cdtMonto": numero (Contribucion Desarrollo Telecom 2%%, usa 0 si no aparece),
@@ -158,13 +163,32 @@ Devuelve SOLO JSON valido (sin markdown, sin comentarios):
 }
 
 ## GUIA DE IMPUESTOS DOMINICANOS
-- ITBIS: 18%% (normal) o 16%% (zona franca) - busca "ITBIS", "I.T.B.I.S", "IVA"
-- ISC Seguros: 16%% sobre primas - facturas de aseguradoras
-- ISC Telecom: 10%% sobre servicios - Claro, Altice, Viva
-- CDT: 2%% adicional en telecom - "Contribucion Desarrollo Telecomunicaciones"
-- 911: Cargo fijo en lineas telefonicas - "Contribucion 911"
-- Propina: 10%% legal en restaurantes/hoteles - "Propina", "Servicio"
-- ISR: Retencion sobre servicios - "Retencion ISR", "ISR", "Impuesto Renta"
+
+### ITBIS (Impuesto Transferencia Bienes y Servicios)
+- 18%% normal o 16%% zona franca - busca "ITBIS", "I.T.B.I.S", "IVA"
+- itbisRetenidoPorcentaje: 30 si gran contribuyente, 100 si retenedor designado, 0 si no hay retencion
+
+### ISC (Impuesto Selectivo al Consumo) - por categoria
+- seguros: 16%% sobre prima neta (facturas de aseguradoras)
+- telecom: 10%% sobre servicio de telecomunicaciones (Claro, Altice, Viva)
+- alcohol: monto especifico por litro (no porcentaje fijo)
+- tabaco: monto especifico por unidad (no porcentaje fijo)
+- combustibles: monto fijo por galon segun tipo de combustible
+- vehiculos: monto segun categoria del vehiculo
+
+### CDT y 911 (solo telecom)
+- CDT: 2%% adicional en facturas telecom - "Contribucion Desarrollo Telecomunicaciones"
+- 911: Cargo fijo en lineas telefonicas - "Contribucion 911", "Cargo 911"
+
+### ISR (Impuesto Sobre la Renta) - tipos de retencion
+- Tipo 1: Alquileres (10%%), Tipo 2: Honorarios personas fisicas (10%%)
+- Tipo 3: Otros ingresos personas fisicas (10%%), Tipo 4: Renta presunta (25%% o 27%%)
+- Tipo 5: Loterias y premios (25%%), Tipo 6: Personas juridicas (27%%)
+- Tipo 7: Servicios en general (10%%), Tipo 8: Dividendos (10%%)
+
+### Propina y ncfModifica
+- Propina: 10%% legal en restaurantes/hoteles - busca "Propina", "Servicio", "10%%"
+- ncfModifica: OBLIGATORIO si tipoNcf es B04 (Nota Credito), E32 (Nota Debito Electronica) o E33 (Nota Credito Electronica)
 
 ## REGLAS CRITICAS
 
@@ -197,78 +221,143 @@ AHORA ANALIZA LA IMAGEN CUIDADOSAMENTE. PRIMERO identifica quien VENDE y quien C
 func (e *Extractor) buildPromptDGII(ocrText string) string {
 	currentYear := time.Now().Year()
 
-	prompt := fmt.Sprintf(`Eres un experto en facturas fiscales de Republica Dominicana. Extrae TODOS los datos de esta factura para el sistema DGII.
+	prompt := fmt.Sprintf(`Eres un EXPERTO en facturas fiscales de Republica Dominicana. Tu trabajo es extraer TODOS los datos fiscales de este texto OCR para el sistema DGII.
 
-IMPORTANTE: Las facturas dominicanas tienen:
-- NCF (Numero de Comprobante Fiscal): formato B0100000001, E310000000001, etc.
-- RNC: 9 digitos (empresas) o 11 digitos (personas/cedula)
-- ITBIS: Impuesto del 18%% sobre productos gravados
+## PASO 1 - IDENTIFICA EL TIPO DE DOCUMENTO:
+- TICKET DE TIENDA: papel termico (supermercados, tiendas, farmacias)
+  * El EMISOR (vendedor) aparece ARRIBA: nombre tienda, RNC, direccion, telefono
+  * El RECEPTOR (comprador) aparece ABAJO: nombre empresa cliente, "RNC/Cedula:"
+- FACTURA FORMAL: papel carta con formato estructurado
+  * El EMISOR esta en el membrete superior
+  * El RECEPTOR dice "Cliente:", "Facturar a:", "Vendido a:"
 
-Extrae y devuelve SOLO JSON valido con esta estructura exacta (sin markdown, sin comentarios):
+## PASO 2 - REGLA CRITICA EMISOR vs RECEPTOR:
+- EMISOR = Quien VENDE (la tienda/negocio que emite la factura)
+  * En tickets: es el negocio del ENCABEZADO (texto al inicio)
+  * Su RNC aparece ARRIBA cerca del nombre o entre los datos del encabezado
+  * Tiendas conocidas RD: Plaza Lama, Jumbo, La Sirena, CCN, Iberia, Bravo, Nacional, etc.
+- RECEPTOR = Quien COMPRA (el cliente que paga)
+  * En tickets: aparece ABAJO, despues de "Total Articulos Vendidos" o "Gracias por su compra"
+  * Busca: "RNC/Cedula:", "Cliente:", "Facturar a:", "Vendido a:"
+  * Si un nombre de empresa aparece DESPUES de los totales con "RNC/Cedula:", ESO es el RECEPTOR
+
+## PASO 3 - FORMATO RNC DOMINICANO:
+- Empresas: 9 digitos (ej: 131047939, 1-31-04793-9)
+- Personas: 11 digitos (cedula, ej: 00112345678)
+- Quita guiones al extraer: "1-31-04793-9" -> "131047939"
+- PUEDE haber DOS RNC diferentes en la factura: uno del emisor y otro del receptor
+- NUNCA copies rncEmisor a rncReceptor o viceversa
+
+## PASO 4 - FORMATO NCF (Comprobante Fiscal):
+- Credito Fiscal: B01XXXXXXXXX (11 digitos despues de B01)
+- Consumidor Final: B02XXXXXXXXX
+- Nota de Credito: B04XXXXXXXXX (REQUIERE ncfModifica)
+- Gubernamental: B15XXXXXXXXX
+- E-CF: E31XXXXXXXXXXXXX (13 digitos despues de E31)
+- Nota Debito Electronica: E32XXXXXXXXXXXXX (REQUIERE ncfModifica)
+- Nota Credito Electronica: E33XXXXXXXXXXXXX (REQUIERE ncfModifica)
+- El NCF aparece frecuentemente al FINAL del ticket, NO confundir con datos del emisor
+
+## CAMPOS A EXTRAER
+
+Devuelve SOLO JSON valido (sin markdown, sin comentarios):
 {
-  "ncf": "B0100000001",
-  "tipoNcf": "B01",
-  "rncEmisor": "123456789",
-  "nombreEmisor": "Nombre del negocio",
-  "tipoIdEmisor": "1",
-  "rncReceptor": "987654321",
-  "nombreReceptor": "Cliente",
-  "tipoIdReceptor": "1",
+  "ncf": "el NCF completo",
+  "tipoNcf": "B01, B02, B04, B15, E31, etc",
+  "ncfModifica": "NCF original que se modifica, OBLIGATORIO si tipoNcf es B04, E32 o E33, null si no aplica",
+  "rncEmisor": "solo digitos, sin guiones - del VENDEDOR",
+  "nombreEmisor": "nombre de la tienda/empresa que VENDE",
+  "tipoIdEmisor": "1=RNC empresa 9 digitos, 2=Cedula 11 digitos",
+  "rncReceptor": "solo digitos, sin guiones - del COMPRADOR",
+  "nombreReceptor": "nombre del cliente que COMPRA",
+  "tipoIdReceptor": "1=RNC empresa 9 digitos, 2=Cedula 11 digitos",
   "fechaFactura": "YYYY-MM-DD",
-  "fechaVencimiento": "YYYY-MM-DD",
-  "subtotal": 1000.00,
-  "descuento": 0.00,
-  "itbis": 180.00,
-  "itbisTasa": 18,
-  "itbisRetenido": 0.00,
-  "itbisExento": 0.00,
-  "isr": 0.00,
-  "retencionIsrTipo": 0,
-  "isc": 0.00,
-  "iscCategoria": null,
-  "cdtMonto": 0.00,
-  "cargo911": 0.00,
-  "propina": 0.00,
-  "otrosImpuestos": 0.00,
-  "montoNoFacturable": 0.00,
-  "total": 1180.00,
-  "formaPago": "01",
-  "tipoBienServicio": "02",
-  "items": [
-    {
-      "codigo": "001",
-      "descripcion": "Producto o servicio",
-      "cantidad": 1,
-      "precioUnit": 100.00,
-      "descuento": 0.00,
-      "itbis": 18.00,
-      "importe": 118.00
-    }
-  ]
+  "fechaVencimiento": "YYYY-MM-DD o null",
+  "fechaPago": "YYYY-MM-DD, requerida si hay retenciones ITBIS o ISR, null si no aplica",
+  "subtotal": numero (base antes de impuestos, usa 0 si no aparece),
+  "descuento": numero (descuento aplicado, usa 0 si no aparece),
+  "montoServicios": numero (monto de la parte de servicios, usa 0 si no aplica - si la factura mezcla productos y servicios separar los montos; si solo servicios poner todo aqui; si solo bienes/productos usar 0),
+  "montoBienes": numero (monto de la parte de bienes/productos, usa 0 si no aplica - si solo bienes poner todo aqui; si solo servicios usar 0),
+  "itbis": numero (ITBIS 18%% facturado, usa 0 si no aparece),
+  "itbisTasa": numero (18 normal o 16 zona franca, usa 18 por defecto),
+  "itbisRetenido": numero (ITBIS retenido, usa 0 si no aparece),
+  "itbisRetenidoPorcentaje": numero (30 si gran contribuyente retiene 30%%, 100 si retenedor designado retiene 100%%, 0 si no hay retencion),
+  "itbisExento": numero (monto exento de ITBIS, usa 0 si no aparece),
+  "isr": numero (ISR retenido, usa 0 si no aparece),
+  "retencionIsrTipo": numero 1-8 (tipo retencion ISR segun tabla DGII, usa 0 si no aplica),
+  "isc": numero (Impuesto Selectivo al Consumo, usa 0 si no aparece),
+  "iscCategoria": "seguros|telecom|alcohol|tabaco|vehiculos|combustibles" o null,
+  "cdtMonto": numero (Contribucion Desarrollo Telecom 2%%, usa 0 si no aparece),
+  "cargo911": numero (Contribucion al 911, usa 0 si no aparece),
+  "propina": numero (propina legal 10%%, usa 0 si no aparece),
+  "otrosImpuestos": numero (impuestos no clasificados, usa 0 si no aparece),
+  "montoNoFacturable": numero (propinas voluntarias, reembolsos, usa 0 si no aparece),
+  "total": numero final a pagar (usa 0 si no aparece, NUNCA null),
+  "formaPago": "01-07 segun codigo",
+  "tipoBienServicio": "01-13 segun codigo",
+  "items": [{"codigo": "001", "descripcion": "...", "cantidad": 1, "precioUnit": 100, "descuento": 0, "itbis": 18, "importe": 118}]
 }
 
-REGLAS DE EXTRACCION:
-1. NCF: Busca patrones como "NCF:", "Comprobante:", "B01", "B02", "B04", "B14", "B15", "E31"
-2. RNC Emisor: Busca "RNC:", "R.N.C.", seguido de 9 u 11 digitos
-3. RNC Receptor: Puede estar como "RNC Cliente:", "Cedula:", "Cliente RNC:"
-4. tipoNcf: Extrae los primeros 3 caracteres del NCF (B01, B02, B04, B14, B15, B16, E31)
-5. tipoIdEmisor/Receptor: "1" si tiene 9 digitos (RNC), "2" si tiene 11 (Cedula)
-6. Subtotal: Monto antes de ITBIS (puede decir "Sub-Total", "Subtotal", "Base Imponible")
-7. ITBIS: 18%% - busca "ITBIS", "I.T.B.I.S", "IVA", "Impuesto"
-8. Propina: 10%% legal - busca "Propina", "Servicio", "10%%"
-9. formaPago: "01"=Efectivo, "02"=Cheque/Transferencia, "03"=Tarjeta, "04"=Credito
-10. tipoBienServicio: Clasifica segun el contenido (ver codigos abajo)
-11. Si no encuentras un dato, usa null o string vacio
-12. Ano por defecto: %d
-13. Todos los montos deben ser numeros decimales (no strings)
+## GUIA DE IMPUESTOS DOMINICANOS
 
-CODIGOS tipoBienServicio:
-01=Personal, 02=Servicios, 03=Arrendamiento, 04=Activos fijos, 05=Representacion,
-06=Deducciones, 07=Financieros, 08=Extraordinarios, 09=Costo venta, 10=Activos,
-11=Seguros, 12=Viajes, 13=Otros
+### ITBIS (Impuesto Transferencia Bienes y Servicios)
+- 18%% normal - busca "ITBIS", "I.T.B.I.S", "IVA", "Impuesto"
+- 16%% zona franca
+- itbisRetenido: monto retenido por el receptor (no por el emisor)
+- itbisRetenidoPorcentaje: 30 si gran contribuyente, 100 si retenedor designado, 0 si no hay retencion
 
-CODIGOS formaPago:
-01=Efectivo, 02=Cheque/Transferencia, 03=Tarjeta, 04=Credito, 05=Permuta, 06=Nota Credito, 07=Mixto
+### ISC (Impuesto Selectivo al Consumo) - por categoria
+- seguros: 16%% sobre prima neta (facturas de aseguradoras)
+- telecom: 10%% sobre servicio de telecomunicaciones (Claro, Altice, Viva)
+- alcohol: monto especifico por litro (no porcentaje fijo)
+- tabaco: monto especifico por unidad (no porcentaje fijo)
+- combustibles: monto fijo por galon segun tipo
+- vehiculos: monto segun categoria del vehiculo
+
+### CDT y 911 (solo telecom)
+- CDT: 2%% adicional en facturas telecom - "Contribucion Desarrollo Telecomunicaciones"
+- 911: Cargo fijo en lineas telefonicas - "Contribucion 911", "Cargo 911"
+
+### ISR (Impuesto Sobre la Renta) - tipos de retencion
+- Tipo 1: Alquileres (10%%)
+- Tipo 2: Honorarios y comisiones personas fisicas (10%%)
+- Tipo 3: Otros ingresos personas fisicas (10%%)
+- Tipo 4: Renta presunta (25%% o 27%%)
+- Tipo 5: Loterias y premios (25%%)
+- Tipo 6: Personas juridicas (27%%)
+- Tipo 7: Servicios en general (10%%)
+- Tipo 8: Dividendos (10%%)
+
+### Propina
+- 10%% legal en restaurantes y hoteles - busca "Propina", "Servicio", "10%%"
+
+### ncfModifica (OBLIGATORIO para notas)
+- Si tipoNcf es B04 (Nota de Credito): ncfModifica = NCF de la factura que se corrige
+- Si tipoNcf es E32 (Nota Debito Electronica): ncfModifica = e-NCF que se modifica
+- Si tipoNcf es E33 (Nota Credito Electronica): ncfModifica = e-NCF que se modifica
+- Para cualquier otro tipo de NCF: ncfModifica = null
+
+## REGLAS CRITICAS
+1. NCF: Busca "NCF:", "Comprobante:", "e-NCF:", "B01", "B02", "B04", "E31"
+2. RNC Emisor: Busca "RNC:", "R.N.C." seguido de 9 u 11 digitos (ARRIBA del texto)
+3. RNC Receptor: Busca "RNC Cliente:", "Cedula:", "RNC/Cedula:" (ABAJO del texto)
+4. tipoNcf: Primeros 3 caracteres del NCF (B01, B02, B04, B14, B15, B16, E31-E45)
+5. tipoIdEmisor/Receptor: "1" si 9 digitos (RNC empresa), "2" si 11 digitos (Cedula)
+6. Subtotal: busca "Sub-Total", "Subtotal", "Base Imponible", "Monto Gravado"
+7. Si no encuentras un dato, usa null para strings o 0 para numeros
+8. Ano por defecto si no se ve: %d
+9. Todos los montos deben ser numeros decimales (no strings)
+10. NUNCA devuelvas null para subtotal, itbis, o total - usa 0 si no puedes leer el valor
+11. NUNCA inventes ni calcules montos que no aparezcan en el texto
+12. NUNCA pongas el mismo RNC en emisor y receptor
+
+## CODIGOS
+
+formaPago: 01=Efectivo, 02=Cheque/Transferencia, 03=Tarjeta, 04=Credito, 05=Permuta, 06=Nota Credito, 07=Mixto
+
+tipoBienServicio: 01=Personal, 02=Servicios, 03=Arrendamiento, 04=Activos fijos, 05=Representacion, 06=Deducciones, 07=Financieros, 08=Extraordinarios, 09=Costo venta, 10=Activos, 11=Seguros, 12=Viajes, 13=Otros
+
+AHORA ANALIZA EL TEXTO. PRIMERO identifica quien VENDE y quien COMPRA, LUEGO extrae todos los datos fiscales.
 
 Texto de la factura:
 %s`, currentYear, ocrText)
@@ -299,15 +388,18 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 		FechaVencimiento string      `json:"fechaVencimiento"`
 		FechaPago        string      `json:"fechaPago"`
 		// Montos base
-		Subtotal  interface{} `json:"subtotal"`
-		Descuento interface{} `json:"descuento"`
+		Subtotal       interface{} `json:"subtotal"`
+		Descuento      interface{} `json:"descuento"`
+		MontoServicios interface{} `json:"montoServicios"`
+		MontoBienes    interface{} `json:"montoBienes"`
 		// ITBIS
-		ITBIS                 interface{} `json:"itbis"`
-		ITBISTasa             interface{} `json:"itbisTasa"`
-		ITBISRetenido         interface{} `json:"itbisRetenido"`
-		ITBISExento           interface{} `json:"itbisExento"`
-		ITBISProporcionalidad interface{} `json:"itbisProporcionalidad"`
-		ITBISCosto            interface{} `json:"itbisCosto"`
+		ITBIS                   interface{} `json:"itbis"`
+		ITBISTasa               interface{} `json:"itbisTasa"`
+		ITBISRetenido           interface{} `json:"itbisRetenido"`
+		ITBISRetenidoPorcentaje interface{} `json:"itbisRetenidoPorcentaje"`
+		ITBISExento             interface{} `json:"itbisExento"`
+		ITBISProporcionalidad   interface{} `json:"itbisProporcionalidad"`
+		ITBISCosto              interface{} `json:"itbisCosto"`
 		// ISR
 		ISR              interface{} `json:"isr"`
 		RetencionISRTipo interface{} `json:"retencionIsrTipo"`
@@ -382,10 +474,15 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 	invoice.Subtotal = parseDecimal(raw.Subtotal)
 	invoice.Descuento = parseDecimal(raw.Descuento)
 
+	// Parse amounts - Montos separados
+	invoice.MontoServicios = parseDecimal(raw.MontoServicios)
+	invoice.MontoBienes = parseDecimal(raw.MontoBienes)
+
 	// Parse amounts - ITBIS
 	invoice.ITBIS = parseDecimal(raw.ITBIS)
 	invoice.ITBISTasa = parseDecimal(raw.ITBISTasa)
 	invoice.ITBISRetenido = parseDecimal(raw.ITBISRetenido)
+	invoice.ITBISRetenidoPorcentaje = int(parseDecimal(raw.ITBISRetenidoPorcentaje).IntPart())
 	invoice.ITBISExento = parseDecimal(raw.ITBISExento)
 	invoice.ITBISProporcionalidad = parseDecimal(raw.ITBISProporcionalidad)
 	invoice.ITBISCosto = parseDecimal(raw.ITBISCosto)
