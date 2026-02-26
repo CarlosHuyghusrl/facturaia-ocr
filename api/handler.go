@@ -339,20 +339,26 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 
 	// === PASO: Validación cruzada de impuestos ===
 	validationInput := &services.InvoiceInput{
-		MontoServicios:       decimalToFloat64(invoice.Subtotal), // Using subtotal as base
-		MontoBienes:          0,
-		Descuento:            0, // TODO: extraer de invoice cuando se implemente
-		ITBISFacturado:       decimalToFloat64(invoice.ITBIS),
-		ITBISExento:          0,
-		ITBISRetenido:        decimalToFloat64(invoice.ITBISRetenido),
-		ISCMonto:             0, // TODO: extraer de invoice.ISC cuando se implemente
-		CDTMonto:             0,
-		Cargo911:             0,
-		PropinaLegal:         decimalToFloat64(invoice.Propina),
-		OtrosImpuestos:       decimalToFloat64(invoice.OtrosImpuestos),
-		RetencionISRMonto:    decimalToFloat64(invoice.ISR),
-		TotalFactura:         decimalToFloat64(invoice.Total),
-		NCF:                  invoice.NCF,
+		MontoServicios:        decimalToFloat64(invoice.Subtotal),
+		MontoBienes:           0,
+		Descuento:             decimalToFloat64(invoice.Descuento),
+		ITBISFacturado:        decimalToFloat64(invoice.ITBIS),
+		ITBISTasa:             decimalToFloat64(invoice.ITBISTasa),
+		ITBISExento:           decimalToFloat64(invoice.ITBISExento),
+		ITBISRetenido:         decimalToFloat64(invoice.ITBISRetenido),
+		ITBISProporcionalidad: decimalToFloat64(invoice.ITBISProporcionalidad),
+		ITBISCosto:            decimalToFloat64(invoice.ITBISCosto),
+		ISCMonto:              decimalToFloat64(invoice.ISC),
+		ISCCategoria:          invoice.ISCCategoria,
+		CDTMonto:              decimalToFloat64(invoice.CDTMonto),
+		Cargo911:              decimalToFloat64(invoice.Cargo911),
+		PropinaLegal:          decimalToFloat64(invoice.Propina),
+		OtrosImpuestos:        decimalToFloat64(invoice.OtrosImpuestos),
+		MontoNoFacturable:     decimalToFloat64(invoice.MontoNoFacturable),
+		RetencionISRTipo:      invoice.RetencionISRTipo,
+		RetencionISRMonto:     decimalToFloat64(invoice.ISR),
+		TotalFactura:          decimalToFloat64(invoice.Total),
+		NCF:                   invoice.NCF,
 	}
 
 	validator := services.NewTaxValidator()
