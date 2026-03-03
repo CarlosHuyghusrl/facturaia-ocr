@@ -380,10 +380,10 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 		NCFModifica      string      `json:"ncfModifica"`
 		RNCEmisor        string      `json:"rncEmisor"`
 		NombreEmisor     string      `json:"nombreEmisor"`
-		TipoIDEmisor     string      `json:"tipoIdEmisor"`
+		TipoIDEmisor     interface{} `json:"tipoIdEmisor"`
 		RNCReceptor      string      `json:"rncReceptor"`
 		NombreReceptor   string      `json:"nombreReceptor"`
-		TipoIDReceptor   string      `json:"tipoIdReceptor"`
+		TipoIDReceptor   interface{} `json:"tipoIdReceptor"`
 		FechaFactura     string      `json:"fechaFactura"`
 		FechaVencimiento string      `json:"fechaVencimiento"`
 		FechaPago        string      `json:"fechaPago"`
@@ -434,6 +434,30 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 		return nil, fmt.Errorf("JSON parse error: %w - Response: %s", err, cleaned)
 	}
 
+	// Convert tipoIdEmisor/Receptor from interface{} (can be number or string from AI)
+	tipoIDEmisor := ""
+	if raw.TipoIDEmisor != nil {
+		switch v := raw.TipoIDEmisor.(type) {
+		case string:
+			tipoIDEmisor = v
+		case float64:
+			tipoIDEmisor = fmt.Sprintf("%.0f", v)
+		default:
+			tipoIDEmisor = fmt.Sprintf("%v", v)
+		}
+	}
+	tipoIDReceptor := ""
+	if raw.TipoIDReceptor != nil {
+		switch v := raw.TipoIDReceptor.(type) {
+		case string:
+			tipoIDReceptor = v
+		case float64:
+			tipoIDReceptor = fmt.Sprintf("%.0f", v)
+		default:
+			tipoIDReceptor = fmt.Sprintf("%v", v)
+		}
+	}
+
 	// Build invoice with all DGII fields
 	invoice := &models.Invoice{
 		// Comprobante fiscal
@@ -444,12 +468,12 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 		// Emisor
 		RNCEmisor:    cleanRNC(raw.RNCEmisor),
 		NombreEmisor: raw.NombreEmisor,
-		TipoIDEmisor: raw.TipoIDEmisor,
+		TipoIDEmisor: tipoIDEmisor,
 
 		// Receptor
 		RNCReceptor:    cleanRNC(raw.RNCReceptor),
 		NombreReceptor: raw.NombreReceptor,
-		TipoIDReceptor: raw.TipoIDReceptor,
+		TipoIDReceptor: tipoIDReceptor,
 
 		// Clasificacion
 		FormaPago:        raw.FormaPago,
