@@ -394,7 +394,7 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 	extractionStatus := "validated"
 	if !validationResult.Valid {
 		extractionStatus = "error"
-	} else if validationResult.NeedsReview || invoice.Confidence < 0.85 {
+	} else if validationResult.NeedsReview && invoice.Confidence < 0.75 {
 		extractionStatus = "review"
 		validationResult.NeedsReview = true
 	}

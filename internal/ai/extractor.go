@@ -176,6 +176,13 @@ Devuelve SOLO JSON valido (sin markdown, sin comentarios):
 - combustibles: monto fijo por galon segun tipo de combustible
 - vehiculos: monto segun categoria del vehiculo
 
+COMO IDENTIFICAR ISC EN LA FACTURA:
+- Busca exactamente las palabras: "ISC", "Imp. Selectivo", "Selectivo Consumo", "ISCA", "Impuesto Selectivo al Consumo"
+- En facturas telecom (Claro, Altice, Viva, Wind Telecom): ISC aparece como línea separada junto al ITBIS. Si ves "CDT" o "Cargo 911", hay ISC telecom del 10%%.
+- En facturas de seguros (ARS, aseguradoras): busca "Prima Neta" y calcula 16%% sobre ese valor
+- Si encuentras monto de ISC pero no puedes determinar categoría, usa "otros" como iscCategoria
+- NUNCA confundas ISC con ITBIS — son impuestos diferentes y separados en la factura
+
 ### CDT y 911 (solo telecom)
 - CDT: 2%% adicional en facturas telecom - "Contribucion Desarrollo Telecomunicaciones"
 - 911: Cargo fijo en lineas telefonicas - "Contribucion 911", "Cargo 911"
@@ -313,6 +320,13 @@ Devuelve SOLO JSON valido (sin markdown, sin comentarios):
 - tabaco: monto especifico por unidad (no porcentaje fijo)
 - combustibles: monto fijo por galon segun tipo
 - vehiculos: monto segun categoria del vehiculo
+
+COMO IDENTIFICAR ISC EN LA FACTURA:
+- Busca exactamente las palabras: "ISC", "Imp. Selectivo", "Selectivo Consumo", "ISCA", "Impuesto Selectivo al Consumo"
+- En facturas telecom (Claro, Altice, Viva, Wind Telecom): ISC aparece como línea separada junto al ITBIS. Si ves "CDT" o "Cargo 911", hay ISC telecom del 10%%.
+- En facturas de seguros (ARS, aseguradoras): busca "Prima Neta" y calcula 16%% sobre ese valor
+- Si encuentras monto de ISC pero no puedes determinar categoría, usa "otros" como iscCategoria
+- NUNCA confundas ISC con ITBIS — son impuestos diferentes y separados en la factura
 
 ### CDT y 911 (solo telecom)
 - CDT: 2%% adicional en facturas telecom - "Contribucion Desarrollo Telecomunicaciones"

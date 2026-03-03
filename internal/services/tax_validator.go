@@ -237,10 +237,10 @@ func (v *TaxValidator) validateTelecom(input *InvoiceInput, result *ValidationRe
 		return
 	}
 
-	// Validate ISC (10%)
+	// Validate ISC (10%) - tolerancia 15% para ISC
 	iscEsperado := baseGravada * 0.10
 	diffISC := math.Abs(input.ISCMonto - iscEsperado)
-	if diffISC > (iscEsperado * v.tolerance) {
+	if diffISC > (iscEsperado * 0.15) {
 		result.Warnings = append(result.Warnings, ValidationWarning{
 			Field:   "isc_monto",
 			Code:    "isc_telecom_mismatch",
@@ -429,7 +429,7 @@ func (v *TaxValidator) validateISCSeguros(input *InvoiceInput, result *Validatio
 	}
 	iscEsperado := baseGravada * 0.16
 	diff := math.Abs(input.ISCMonto - iscEsperado)
-	if diff > (iscEsperado * v.tolerance) {
+	if diff > (iscEsperado * 0.15) {
 		result.Warnings = append(result.Warnings, ValidationWarning{
 			Field:   "isc_monto",
 			Code:    "isc_seguros_mismatch",
