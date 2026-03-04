@@ -519,6 +519,8 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		"fecha_documento":  invoice.FechaFactura,
 
 		// Montos base
+		"proveedor":        invoice.NombreEmisor,
+		"subtotal":         decimalToFloat64(invoice.Subtotal),
 		"monto_servicios":  montoServicios,
 		"monto_bienes":     montoBienes,
 		"descuento":        decimalToFloat64(invoice.Descuento),
@@ -526,7 +528,7 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		"itbis_retenido_porcentaje": invoice.ITBISRetenidoPorcentaje,
 
 		// ITBIS
-		"itbis_facturado":        decimalToFloat64(invoice.ITBIS),
+		"itbis":                  decimalToFloat64(invoice.ITBIS),
 		"itbis_tasa":             decimalToFloat64(invoice.ITBISTasa),
 		"itbis_exento":           decimalToFloat64(invoice.ITBISExento),
 		"itbis_proporcionalidad": decimalToFloat64(invoice.ITBISProporcionalidad),
@@ -534,22 +536,23 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		"itbis_retenido":         decimalToFloat64(invoice.ITBISRetenido),
 
 		// ISC
-		"isc_monto":     decimalToFloat64(invoice.ISC),
+		"isc":           decimalToFloat64(invoice.ISC),
 		"isc_categoria": invoice.ISCCategoria,
 
 		// Otros cargos
 		"cdt_monto":           decimalToFloat64(invoice.CDTMonto),
 		"cargo_911":           decimalToFloat64(invoice.Cargo911),
-		"propina_legal":       decimalToFloat64(invoice.Propina),
+		"propina":             decimalToFloat64(invoice.Propina),
 		"otros_impuestos":     decimalToFloat64(invoice.OtrosImpuestos),
 		"monto_no_facturable": decimalToFloat64(invoice.MontoNoFacturable),
 
 		// Retenciones ISR
-		"retencion_isr_tipo":  invoice.RetencionISRTipo,
-		"retencion_isr_monto": decimalToFloat64(invoice.ISR),
+		"retencion_isr_tipo": invoice.RetencionISRTipo,
+		"isr":                decimalToFloat64(invoice.ISR),
 
 		// Total
-		"total_factura":    decimalToFloat64(invoice.Total),
+		"monto": decimalToFloat64(invoice.Total),
+		"total": decimalToFloat64(invoice.Total),
 
 		// Metadata
 		"confidence_score": invoice.Confidence,
