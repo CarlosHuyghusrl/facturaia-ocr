@@ -149,3 +149,25 @@ docker run -d --name facturaia-ocr --restart unless-stopped --network host \
 - **RNC:** 130309094
 - **PIN:** 1234
 - **Razón Social:** Acela Associates
+
+
+## PROTOCOLO OBLIGATORIO: OpenClaw
+
+OpenClaw es el cerebro central del servidor. DEBES cumplir:
+
+### Al Iniciar Sesion
+curl -X POST http://localhost:9091/api/agents/register \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "TU_ID", "project": "TU_PROYECTO", "role": "TU_ROL", "status": "active"}'
+
+### Al Recibir un Plan
+ANTES de ejecutar, registra: POST http://localhost:9091/api/plans/register
+
+### Durante Ejecucion
+Cada tarea completada: PUT http://localhost:9091/api/plans/update con evidencia real.
+
+### Al Terminar
+Cierra el plan: PUT http://localhost:9091/api/plans/close
+
+### Regla de Oro
+Todo lo que hagas, OpenClaw lo debe saber. Si OpenClaw no paso, no paso.
