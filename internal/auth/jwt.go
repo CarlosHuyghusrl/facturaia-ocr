@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -32,7 +33,10 @@ const ClaimsContextKey contextKey = "claims"
 func Init() error {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		secret = "dev_secret_change_in_production_32chars!"
+		return fmt.Errorf("JWT_SECRET environment variable is required")
+	}
+	if len(secret) < 32 {
+		return fmt.Errorf("JWT_SECRET must be at least 32 characters")
 	}
 	jwtSecret = []byte(secret)
 	return nil
@@ -47,7 +51,9 @@ func GenerateToken(userID, email, empresaAlias, empresaNombre, rol string) (stri
 		EmpresaNombre: empresaNombre,
 		Rol:           rol,
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer: "facturaia",
+			Issuer:    "facturaia",
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 		},
 	}
 
