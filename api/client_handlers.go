@@ -338,7 +338,7 @@ func (h *Handler) ReprocesarClientInvoice(w http.ResponseWriter, r *http.Request
 }
 
 // GetClientInvoiceImage - GET /api/facturas/{id}/imagen - Proxy MinIO image
-// No JWT required - protected by UUID (not guessable)
+// Validates client ownership when JWT is present
 func (h *Handler) GetClientInvoiceImage(w http.ResponseWriter, r *http.Request) {
 	if storage.Client == nil {
 		http.Error(w, "storage not available", http.StatusServiceUnavailable)
@@ -353,13 +353,37 @@ func (h *Handler) GetClientInvoiceImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Check JWT if present - verify ownership
 	var archivoURL string
-	err := db.Pool.QueryRow(r.Context(),
-		"SELECT COALESCE(archivo_url, '') FROM facturas_clientes WHERE id = $1::uuid", invoiceID,
-	).Scan(&archivoURL)
-	if err != nil || archivoURL == "" {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
+		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+		claims, err := auth.ValidateToken(tokenStr)
+		if err == nil && claims.UserID != "" {
+			// JWT present and valid - enforce ownership check
+			err = db.Pool.QueryRow(r.Context(),
+				"SELECT COALESCE(archivo_url, '') FROM facturas_clientes WHERE id = $1::uuid AND cliente_id = $2::uuid",
+				invoiceID, claims.UserID,
+			).Scan(&archivoURL)
+			if err != nil || archivoURL == "" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+		} else {
+			// Invalid token - deny
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+	} else {
+		// No JWT - UUID-only access (legacy, log warning)
+		log.Printf("WARNING: Image access without JWT for invoice %s from %s", invoiceID, r.RemoteAddr)
+		err := db.Pool.QueryRow(r.Context(),
+			"SELECT COALESCE(archivo_url, '') FROM facturas_clientes WHERE id = $1::uuid", invoiceID,
+		).Scan(&archivoURL)
+		if err != nil || archivoURL == "" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 	}
 
 	// Remove bucket prefix to get object name
