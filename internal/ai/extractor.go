@@ -387,6 +387,16 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 	cleaned = strings.ReplaceAll(cleaned, backticks, "")
 	cleaned = strings.TrimSpace(cleaned)
 
+	// If response doesn't start with {, try to extract JSON from it
+	if !strings.HasPrefix(cleaned, "{") {
+		// Try to find JSON object in the response
+		startIdx := strings.Index(cleaned, "{")
+		endIdx := strings.LastIndex(cleaned, "}")
+		if startIdx >= 0 && endIdx > startIdx {
+			cleaned = cleaned[startIdx : endIdx+1]
+		}
+	}
+
 	// Parse JSON - use interface{} for flexible number parsing (handles strings with commas)
 	var raw struct {
 		NCF              string      `json:"ncf"`

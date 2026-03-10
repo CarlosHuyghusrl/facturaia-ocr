@@ -59,9 +59,16 @@ func (p *OpenAIProvider) ExtractData(prompt string, imageBase64 string) (string,
 	// Build messages
 	var messages []openai.ChatCompletionMessage
 
+	// System message to enforce JSON output
+	systemMsg := openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleSystem,
+		Content: "Eres un extractor de datos de facturas. SIEMPRE responde ÚNICAMENTE con JSON válido. NUNCA incluyas texto explicativo, narrativa, ni markdown. Tu respuesta debe comenzar con { y terminar con }. Si no puedes extraer datos, responde con un JSON con campos vacíos.",
+	}
+
 	if imageBase64 != "" {
 		// Vision model with image
 		messages = []openai.ChatCompletionMessage{
+			systemMsg,
 			{
 				Role: openai.ChatMessageRoleUser,
 				MultiContent: []openai.ChatMessagePart{
@@ -82,6 +89,7 @@ func (p *OpenAIProvider) ExtractData(prompt string, imageBase64 string) (string,
 	} else {
 		// Text-only
 		messages = []openai.ChatCompletionMessage{
+			systemMsg,
 			{
 				Role:    openai.ChatMessageRoleUser,
 				Content: prompt,
