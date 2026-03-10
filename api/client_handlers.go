@@ -30,7 +30,7 @@ func (h *Handler) GetClientInvoices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -92,7 +92,7 @@ func (h *Handler) GetClientStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -139,7 +139,7 @@ func (h *Handler) GetClientInvoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -169,7 +169,7 @@ func (h *Handler) DeleteClientInvoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -198,7 +198,7 @@ func (h *Handler) ReprocesarClientInvoice(w http.ResponseWriter, r *http.Request
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -214,7 +214,7 @@ func (h *Handler) ReprocesarClientInvoice(w http.ResponseWriter, r *http.Request
 
 	// Download image from MinIO
 	if storage.Client == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "storage not available")
+		sendAppError(w, ErrStorageUnavailable)
 		return
 	}
 

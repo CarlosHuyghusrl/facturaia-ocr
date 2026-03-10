@@ -2,10 +2,12 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -72,6 +74,9 @@ func (h *Handler) SetupRoutes() *mux.Router {
 
 	// === VALIDACION IMPUESTOS DGII ===
 	router.HandleFunc("/api/v1/invoices/validate", h.ValidateInvoiceTaxes).Methods("POST")
+
+	// === SHAREPOINT SYNC MONITORING ===
+	router.HandleFunc("/api/admin/sharepoint-queue", h.GetSharePointQueueStatus).Methods("GET")
 
 	return router
 }
@@ -248,7 +253,7 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, MaxUploadSize)
 	err = r.ParseMultipartForm(MaxUploadSize)
 	if err != nil {
-		h.sendError(w, http.StatusBadRequest, "File too large or invalid form data")
+		sendAppError(w, ErrFileTooLarge)
 		return
 	}
 
@@ -506,6 +511,22 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("Warning: failed to save client invoice to DB: %v\n", err)
 		} else {
 			savedClientInvoice = clientInvoice
+
+			// Queue for SharePoint sync (non-blocking)
+			go func(facturaID, clienteID, rncCliente string, fechaFactura *time.Time, archivoURL, archivoNombre string) {
+				if archivoURL != "" && db.Pool != nil {
+					_, qErr := db.Pool.Exec(context.Background(),
+						`INSERT INTO sharepoint_sync_queue (factura_id, cliente_id, rnc_cliente, fecha_factura, archivo_url, archivo_nombre)
+						 VALUES ($1, $2, $3, $4, $5, $6)
+						 ON CONFLICT DO NOTHING`,
+						facturaID, clienteID, rncCliente, fechaFactura, archivoURL, archivoNombre)
+					if qErr != nil {
+						log.Printf("[SharePoint Queue] Error queueing factura %s: %v", facturaID, qErr)
+					} else {
+						log.Printf("[SharePoint Queue] Queued factura %s for sync", facturaID)
+					}
+				}
+			}(clientInvoice.ID, clientInvoice.ClienteID, claims.EmpresaAlias, fechaDoc, imagenURL, filename)
 		}
 	}
 
@@ -562,10 +583,22 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		"items":            invoice.Items,
 	}
 
+	// Determinar user_message según extraction_status
+	var userMessage string
+	switch extractionStatus {
+	case "error":
+		userMessage = "No pudimos extraer la información. Intenta con mejor iluminación."
+	case "review":
+		userMessage = "Algunos datos necesitan revisión. Por favor verifica los campos marcados."
+	default:
+		userMessage = "Factura procesada exitosamente."
+	}
+
 	// Build response con nuevo formato
 	responseData := map[string]interface{}{
 		"success":           true,
 		"extraction_status": extractionStatus,
+		"user_message":      userMessage,
 		"data":              dataMap,
 		"validation":        validationResult,
 		"ocrDuration":       ocrDuration,
@@ -601,7 +634,7 @@ func (h *Handler) GetInvoices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -640,7 +673,7 @@ func (h *Handler) GetInvoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -680,7 +713,7 @@ func (h *Handler) UpdateInvoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -739,7 +772,7 @@ func (h *Handler) DeleteInvoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -778,7 +811,7 @@ func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if db.Pool == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		sendAppError(w, ErrDBUnavailable)
 		return
 	}
 
@@ -923,6 +956,41 @@ func (h *Handler) ValidateInvoiceTaxes(w http.ResponseWriter, r *http.Request) {
 	// Validate
 	validator := services.NewTaxValidator()
 	result := validator.Validate(&input)
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(result)
+}
+
+// GetSharePointQueueStatus returns the current status counts of the SharePoint sync queue
+// GET /api/admin/sharepoint-queue
+func (h *Handler) GetSharePointQueueStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if db.Pool == nil {
+		h.sendError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+
+	rows, err := db.Pool.Query(r.Context(), `
+		SELECT status, COUNT(*) as count
+		FROM sharepoint_sync_queue
+		GROUP BY status
+		ORDER BY status
+	`)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	result := make(map[string]int)
+	for rows.Next() {
+		var status string
+		var count int
+		if scanErr := rows.Scan(&status, &count); scanErr == nil {
+			result[status] = count
+		}
+	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(result)
