@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/facturaIA/invoice-ocr-service/api"
 	"github.com/facturaIA/invoice-ocr-service/internal/auth"
@@ -21,13 +22,26 @@ func main() {
 	}
 	log.Println("JWT authentication initialized")
 
-	// Initialize database connection pool
-	if err := db.Init(); err != nil {
-		log.Printf("Warning: Database not available: %v", err)
-		log.Println("Running in OCR-only mode (no persistence)")
-	} else {
-		defer db.Close()
-		log.Println("Database connection pool initialized")
+	// Initialize database connection pool with retry
+	{
+		maxRetries := 5
+		var dbErr error
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			if dbErr = db.Init(); dbErr == nil {
+				defer db.Close()
+				log.Println("Database connection pool initialized")
+				break
+			}
+			if attempt < maxRetries {
+				delay := time.Duration(1<<uint(attempt)) * time.Second // 2s, 4s, 8s, 16s
+				log.Printf("Database connection attempt %d/%d failed: %v. Retrying in %v...", attempt, maxRetries, dbErr, delay)
+				time.Sleep(delay)
+			}
+		}
+		if dbErr != nil {
+			log.Printf("Warning: Database not available after %d attempts: %v", maxRetries, dbErr)
+			log.Println("Running in OCR-only mode (no persistence)")
+		}
 	}
 
 	// Initialize MinIO storage
