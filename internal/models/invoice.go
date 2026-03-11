@@ -27,6 +27,7 @@ type Invoice struct {
 	FechaFactura     time.Time `json:"fechaFactura,omitempty"`     // Fecha de la factura
 	FechaVencimiento time.Time `json:"fechaVencimiento,omitempty"` // Fecha de vencimiento
 	FechaPago        time.Time `json:"fechaPago,omitempty"`        // Fecha de pago
+	HoraFactura      string    `json:"horaFactura,omitempty"`      // Hora de la factura HH:MM
 
 	// DGII - Montos Base
 	Subtotal       decimal.Decimal `json:"subtotal,omitempty"`       // Subtotal antes de impuestos

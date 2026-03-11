@@ -288,6 +288,7 @@ func (h *Handler) ReprocesarClientInvoice(w http.ResponseWriter, r *http.Request
 		Proveedor:        reprocessedInvoice.NombreEmisor,
 		ReceptorNombre:   reprocessedInvoice.NombreReceptor,
 		ReceptorRNC:      reprocessedInvoice.RNCReceptor,
+		HoraFactura:      reprocessedInvoice.HoraFactura,
 		FechaDocumento:   fechaDoc,
 		Monto:            decimalToFloat64(reprocessedInvoice.Total),
 		Subtotal:         decimalToFloat64(reprocessedInvoice.Subtotal),
@@ -438,6 +439,7 @@ func clientInvoiceToFrontend(inv *db.ClientInvoice) map[string]interface{} {
 		"receptor_nombre":     inv.ReceptorNombre,
 		"fecha_emision":       fechaEmision,
 		"fecha_documento":     fechaEmision,
+		"hora_factura":        inv.HoraFactura,
 		// Montos base
 		"subtotal":            inv.Subtotal,
 		"descuento":           inv.Descuento,

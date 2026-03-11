@@ -18,6 +18,7 @@ type ClientInvoice struct {
 	ArchivoNombre  string     `json:"archivo_nombre,omitempty"`
 	ArchivoSize    int        `json:"archivo_size,omitempty"`
 	TipoDocumento  string     `json:"tipo_documento,omitempty"`
+	HoraFactura    string     `json:"hora_factura,omitempty"`
 	FechaDocumento *time.Time `json:"fecha_documento,omitempty"`
 	Monto          float64    `json:"monto"`
 	NCF            string     `json:"ncf,omitempty"`
@@ -93,7 +94,7 @@ func GetClientInvoices(ctx context.Context, clienteID string, limit int) ([]Clie
 
 	query := `
 		SELECT id, cliente_id, empresa_id, COALESCE(archivo_url, ''), COALESCE(archivo_nombre, ''),
-		       COALESCE(archivo_size, 0), COALESCE(tipo_documento, ''), fecha_documento,
+		       COALESCE(archivo_size, 0), COALESCE(tipo_documento, ''), COALESCE(hora_factura, ''), fecha_documento,
 		       COALESCE(monto, 0), COALESCE(ncf, ''), COALESCE(proveedor, ''),
 		       COALESCE(estado, 'pendiente'), COALESCE(notas_cliente, ''), COALESCE(notas_contador, ''),
 		       created_at,
@@ -128,7 +129,7 @@ func GetClientInvoices(ctx context.Context, clienteID string, limit int) ([]Clie
 		var inv ClientInvoice
 		err := rows.Scan(
 			&inv.ID, &inv.ClienteID, &inv.EmpresaID, &inv.ArchivoURL, &inv.ArchivoNombre,
-			&inv.ArchivoSize, &inv.TipoDocumento, &inv.FechaDocumento,
+			&inv.ArchivoSize, &inv.TipoDocumento, &inv.HoraFactura, &inv.FechaDocumento,
 			&inv.Monto, &inv.NCF, &inv.Proveedor,
 			&inv.Estado, &inv.NotasCliente, &inv.NotasContador,
 			&inv.CreatedAt,
@@ -171,7 +172,7 @@ func GetClientInvoicesPaginated(ctx context.Context, clienteID string, limit, of
 
 	query := `
 		SELECT id, cliente_id, empresa_id, COALESCE(archivo_url, ''), COALESCE(archivo_nombre, ''),
-		       COALESCE(archivo_size, 0), COALESCE(tipo_documento, ''), fecha_documento,
+		       COALESCE(archivo_size, 0), COALESCE(tipo_documento, ''), COALESCE(hora_factura, ''), fecha_documento,
 		       COALESCE(monto, 0), COALESCE(ncf, ''), COALESCE(proveedor, ''),
 		       COALESCE(estado, 'pendiente'), COALESCE(notas_cliente, ''), COALESCE(notas_contador, ''),
 		       created_at,
@@ -206,7 +207,7 @@ func GetClientInvoicesPaginated(ctx context.Context, clienteID string, limit, of
 		var inv ClientInvoice
 		err := rows.Scan(
 			&inv.ID, &inv.ClienteID, &inv.EmpresaID, &inv.ArchivoURL, &inv.ArchivoNombre,
-			&inv.ArchivoSize, &inv.TipoDocumento, &inv.FechaDocumento,
+			&inv.ArchivoSize, &inv.TipoDocumento, &inv.HoraFactura, &inv.FechaDocumento,
 			&inv.Monto, &inv.NCF, &inv.Proveedor,
 			&inv.Estado, &inv.NotasCliente, &inv.NotasContador,
 			&inv.CreatedAt,
@@ -298,7 +299,7 @@ func GetClientInvoiceByID(ctx context.Context, clienteID, invoiceID string) (*Cl
 
 	query := `
 		SELECT id, cliente_id, empresa_id, COALESCE(archivo_url, ''), COALESCE(archivo_nombre, ''),
-		       COALESCE(archivo_size, 0), COALESCE(tipo_documento, ''), fecha_documento,
+		       COALESCE(archivo_size, 0), COALESCE(tipo_documento, ''), COALESCE(hora_factura, ''), fecha_documento,
 		       COALESCE(monto, 0), COALESCE(ncf, ''), COALESCE(proveedor, ''),
 		       COALESCE(estado, 'pendiente'), COALESCE(notas_cliente, ''), COALESCE(notas_contador, ''),
 		       created_at,
@@ -323,7 +324,7 @@ func GetClientInvoiceByID(ctx context.Context, clienteID, invoiceID string) (*Cl
 	var inv ClientInvoice
 	err := Pool.QueryRow(ctx, query, clienteID, invoiceID).Scan(
 		&inv.ID, &inv.ClienteID, &inv.EmpresaID, &inv.ArchivoURL, &inv.ArchivoNombre,
-		&inv.ArchivoSize, &inv.TipoDocumento, &inv.FechaDocumento,
+		&inv.ArchivoSize, &inv.TipoDocumento, &inv.HoraFactura, &inv.FechaDocumento,
 		&inv.Monto, &inv.NCF, &inv.Proveedor,
 		&inv.Estado, &inv.NotasCliente, &inv.NotasContador,
 		&inv.CreatedAt,
@@ -358,7 +359,7 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 	query := `
 		INSERT INTO facturas_clientes (
 			cliente_id, archivo_url, archivo_nombre, archivo_size,
-			tipo_documento, fecha_documento, monto, ncf, proveedor,
+			tipo_documento, hora_factura, fecha_documento, monto, ncf, proveedor,
 			estado, notas_cliente,
 			emisor_rnc, receptor_nombre, receptor_rnc,
 			subtotal, descuento, itbis, itbis_retenido,
@@ -376,13 +377,13 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 			$12, $13, $14, $15, $16, $17, $18,
 			$19, $20, $21,
 			$22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31,
-			$32, $33, $34,
-			$35, $36::jsonb, $37::jsonb,
-			$38, $39,
-			$40, $41, $42, $43, $44,
-			$45, $46, $47,
-			$48, $49
+			$26, $27, $28, $29, $30, $31, $32,
+			$33, $34, $35,
+			$36, $37::jsonb, $38::jsonb,
+			$39, $40,
+			$41, $42, $43, $44, $45,
+			$46, $47, $48,
+			$49, $50
 		)
 		RETURNING id, created_at
 	`
@@ -398,7 +399,7 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 
 	err := Pool.QueryRow(ctx, query,
 		inv.ClienteID, inv.ArchivoURL, inv.ArchivoNombre, inv.ArchivoSize,
-		inv.TipoDocumento, inv.FechaDocumento, inv.Monto, inv.NCF, inv.Proveedor,
+		inv.TipoDocumento, inv.HoraFactura, inv.FechaDocumento, inv.Monto, inv.NCF, inv.Proveedor,
 		inv.Estado, inv.NotasCliente,
 		inv.EmisorRNC, inv.ReceptorNombre, inv.ReceptorRNC,
 		inv.Subtotal, inv.Descuento, inv.ITBIS, inv.ITBISRetenido,
@@ -416,15 +417,82 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 	return err
 }
 
-// CheckDuplicateNCF checks if a factura with the same NCF already exists for this client
-func CheckDuplicateNCF(ctx context.Context, clienteID, ncf string) (bool, error) {
+// CheckDuplicateNCF checks if a factura with the same NCF AND same emisor already exists for this client
+func CheckDuplicateNCF(ctx context.Context, clienteID, ncf, emisorRNC string) (bool, error) {
 	if Pool == nil || ncf == "" {
 		return false, nil
 	}
+	// Normalize emisor RNC
+	normalizedEmisor := strings.ReplaceAll(emisorRNC, "-", "")
+
 	var count int
 	err := Pool.QueryRow(ctx,
-		"SELECT COUNT(*) FROM facturas_clientes WHERE cliente_id = $1::uuid AND ncf = $2 AND ncf != ''",
-		clienteID, ncf).Scan(&count)
+		`SELECT COUNT(*) FROM facturas_clientes
+		 WHERE cliente_id = $1::uuid AND ncf = $2 AND ncf != ''
+		 AND REPLACE(COALESCE(emisor_rnc, ''), '-', '') = $3`,
+		clienteID, ncf, normalizedEmisor).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// CheckDuplicateByAmount checks for duplicate invoices when NCF is not available.
+// Uses amount + emisor RNC + fecha_documento + hora_factura to detect duplicates.
+// If hora_factura differs, it's a different real invoice (same store, same amount, different time).
+// If hora_factura is empty on both, falls back to 10-minute upload window.
+func CheckDuplicateByAmount(ctx context.Context, clienteID string, monto float64, emisorRNC string, fechaDoc *time.Time, horaFactura string) (bool, error) {
+	if Pool == nil || monto == 0 {
+		return false, nil
+	}
+	normalizedEmisor := strings.ReplaceAll(emisorRNC, "-", "")
+
+	// If we have fecha_documento from the invoice, use invoice-data comparison
+	if fechaDoc != nil {
+		if horaFactura != "" {
+			// Best case: compare fecha + hora + monto + emisor
+			// Same date + same time + same amount + same emisor = duplicate
+			// Same date + DIFFERENT time + same amount + same emisor = NOT duplicate (real different invoice)
+			var count int
+			err := Pool.QueryRow(ctx,
+				`SELECT COUNT(*) FROM facturas_clientes
+				 WHERE cliente_id = $1::uuid
+				 AND monto = $2
+				 AND REPLACE(COALESCE(emisor_rnc, ''), '-', '') = $3
+				 AND fecha_documento = $4
+				 AND hora_factura = $5`,
+				clienteID, monto, normalizedEmisor, fechaDoc, horaFactura).Scan(&count)
+			if err != nil {
+				return false, err
+			}
+			return count > 0, nil
+		}
+		// Have fecha but no hora: check by fecha + monto + emisor
+		// But also check if existing invoices have hora - if they do and are different, allow
+		var count int
+		err := Pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM facturas_clientes
+			 WHERE cliente_id = $1::uuid
+			 AND monto = $2
+			 AND REPLACE(COALESCE(emisor_rnc, ''), '-', '') = $3
+			 AND fecha_documento = $4
+			 AND (hora_factura IS NULL OR hora_factura = '')`,
+			clienteID, monto, normalizedEmisor, fechaDoc).Scan(&count)
+		if err != nil {
+			return false, err
+		}
+		return count > 0, nil
+	}
+
+	// Fallback: no fecha_documento, use original 10-minute window on created_at
+	var count int
+	err := Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM facturas_clientes
+		 WHERE cliente_id = $1::uuid
+		 AND monto = $2
+		 AND REPLACE(COALESCE(emisor_rnc, ''), '-', '') = $3
+		 AND created_at > NOW() - INTERVAL '10 minutes'`,
+		clienteID, monto, normalizedEmisor).Scan(&count)
 	if err != nil {
 		return false, err
 	}

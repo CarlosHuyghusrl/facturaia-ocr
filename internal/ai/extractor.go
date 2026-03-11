@@ -136,6 +136,7 @@ Devuelve SOLO JSON valido (sin markdown, sin comentarios):
   "nombreReceptor": "nombre del cliente que COMPRA",
   "tipoIdReceptor": "1=RNC, 2=Cedula",
   "fechaFactura": "YYYY-MM-DD",
+  "horaFactura": "HH:MM (hora que aparece impresa en la factura, null si no se ve)",
   "fechaVencimiento": "YYYY-MM-DD o null",
   "fechaPago": "YYYY-MM-DD, requerida si hay retenciones ITBIS o ISR, null si no aplica",
   "subtotal": numero (base antes de impuestos, usa 0 si no aparece),
@@ -279,6 +280,7 @@ Devuelve SOLO JSON valido (sin markdown, sin comentarios):
   "nombreReceptor": "nombre del cliente que COMPRA",
   "tipoIdReceptor": "1=RNC empresa 9 digitos, 2=Cedula 11 digitos",
   "fechaFactura": "YYYY-MM-DD",
+  "horaFactura": "HH:MM (hora que aparece impresa en la factura, null si no se ve)",
   "fechaVencimiento": "YYYY-MM-DD o null",
   "fechaPago": "YYYY-MM-DD, requerida si hay retenciones ITBIS o ISR, null si no aplica",
   "subtotal": numero (base antes de impuestos, usa 0 si no aparece),
@@ -409,6 +411,7 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 		NombreReceptor   string      `json:"nombreReceptor"`
 		TipoIDReceptor   interface{} `json:"tipoIdReceptor"`
 		FechaFactura     string      `json:"fechaFactura"`
+		HoraFactura      string      `json:"horaFactura"`
 		FechaVencimiento string      `json:"fechaVencimiento"`
 		FechaPago        string      `json:"fechaPago"`
 		// Montos base
@@ -514,6 +517,7 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 
 	// Parse dates
 	invoice.FechaFactura = parseDate(raw.FechaFactura)
+	invoice.HoraFactura = raw.HoraFactura
 	invoice.FechaVencimiento = parseDate(raw.FechaVencimiento)
 	invoice.FechaPago = parseDate(raw.FechaPago)
 	invoice.Date = invoice.FechaFactura // Legacy
