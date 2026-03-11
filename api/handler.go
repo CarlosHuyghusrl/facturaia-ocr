@@ -67,7 +67,7 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/facturas/upload/", h.ProcessInvoice).Methods("POST")
 	router.HandleFunc("/api/facturas/mis-facturas/", h.GetClientInvoices).Methods("GET")
 	router.HandleFunc("/api/facturas/resumen", h.GetClientStats).Methods("GET")
-	router.HandleFunc("/api/facturas/{id}/reprocesar", h.ReprocesarClientInvoice).Methods("POST")
+	router.Handle("/api/facturas/{id}/reprocesar", auth.RequireRole("admin", "contador")(http.HandlerFunc(h.ReprocesarClientInvoice))).Methods("POST")
 	router.HandleFunc("/api/facturas/{id}/imagen", h.GetClientInvoiceImage).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}", h.GetClientInvoice).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}", h.DeleteClientInvoice).Methods("DELETE")
@@ -76,7 +76,7 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/v1/invoices/validate", h.ValidateInvoiceTaxes).Methods("POST")
 
 	// === SHAREPOINT SYNC MONITORING ===
-	router.HandleFunc("/api/admin/sharepoint-queue", h.GetSharePointQueueStatus).Methods("GET")
+	router.Handle("/api/admin/sharepoint-queue", auth.RequireRole("admin")(http.HandlerFunc(h.GetSharePointQueueStatus))).Methods("GET")
 
 	return router
 }
