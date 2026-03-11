@@ -414,6 +414,7 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 
 	// Save to facturas_clientes (client mobile app table)
 	var savedClientInvoice *db.ClientInvoice
+	rncMismatchWarning := ""
 	if db.Pool != nil && invoice != nil {
 		// Parse fecha
 		var fechaDoc *time.Time
@@ -439,11 +440,9 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Determinar estado según extraction_status
-		estado := "pendiente"
-		if extractionStatus == "validated" {
-			estado = "procesado"
-		}
+		// Toda factura escaneada exitosamente = "procesado" para el usuario
+		// extraction_status y review_notes guardan los detalles internos para el contador
+		estado := "procesado"
 
 		// === VALIDACION 1: Duplicados ===
 		if invoice.NCF != "" {
@@ -476,18 +475,12 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// === VALIDACION 2: Receptor RNC no coincide con cliente ===
+		// Se guarda la factura pero se advierte al usuario
 		clientRNC, _ := db.GetClientRNC(ctx, claims.UserID)
 		if clientRNC != "" && invoice.RNCReceptor != "" {
 			normalizedReceptorRNC := strings.ReplaceAll(invoice.RNCReceptor, "-", "")
 			if clientRNC != normalizedReceptorRNC {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success":      false,
-					"error_code":   "RECEPTOR_MISMATCH",
-					"error":        fmt.Sprintf("Esta factura es para RNC %s, no para su RNC %s", invoice.RNCReceptor, clientRNC),
-					"user_message": fmt.Sprintf("Esta factura está dirigida a RNC %s, pero su RNC es %s. Solo puede registrar facturas dirigidas a usted.", invoice.RNCReceptor, clientRNC),
-				})
-				return
+				rncMismatchWarning = fmt.Sprintf("Nota: Esta factura tiene RNC receptor %s, pero su RNC es %s. Se guardó de todas formas.", invoice.RNCReceptor, clientRNC)
 			}
 		}
 
@@ -644,6 +637,7 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 	// Build response con nuevo formato
 	responseData := map[string]interface{}{
 		"success":           true,
+		"warning":           rncMismatchWarning,
 		"extraction_status": extractionStatus,
 		"user_message":      userMessage,
 		"data":              dataMap,
