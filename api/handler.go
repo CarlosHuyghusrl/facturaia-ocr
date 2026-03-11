@@ -445,6 +445,33 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			estado = "procesado"
 		}
 
+		// === VALIDACION 1: NCF Duplicado ===
+		if invoice.NCF != "" {
+			isDup, dupErr := db.CheckDuplicateNCF(ctx, claims.UserID, invoice.NCF)
+			if dupErr == nil && isDup {
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success":      false,
+					"error_code":   "DUPLICATE_NCF",
+					"error":        fmt.Sprintf("Ya existe una factura con NCF %s", invoice.NCF),
+					"user_message": fmt.Sprintf("Ya tienes una factura con NCF %s registrada. No se guardó para evitar duplicados.", invoice.NCF),
+				})
+				return
+			}
+		}
+
+		// === VALIDACION 2: Receptor RNC no coincide con cliente ===
+		clientRNC, _ := db.GetClientRNC(ctx, claims.UserID)
+		if clientRNC != "" && invoice.RNCReceptor != "" {
+			normalizedReceptorRNC := strings.ReplaceAll(invoice.RNCReceptor, "-", "")
+			if clientRNC != normalizedReceptorRNC {
+				// Warning but still save - set to review
+				extractionStatus = "review"
+				estado = "pendiente"
+				reviewNotes = fmt.Sprintf(`{"receptor_mismatch": true, "client_rnc": "%s", "receptor_rnc": "%s", "message": "El RNC del receptor (%s) no coincide con su RNC (%s). Verifique que esta factura le pertenece."}`, clientRNC, normalizedReceptorRNC, invoice.RNCReceptor, clientRNC)
+			}
+		}
+
 		// FechaPago para BD
 		var fechaPago *time.Time
 		if !invoice.FechaPago.IsZero() {

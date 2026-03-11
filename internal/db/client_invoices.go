@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -413,6 +414,31 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 	).Scan(&inv.ID, &inv.CreatedAt)
 
 	return err
+}
+
+// CheckDuplicateNCF checks if a factura with the same NCF already exists for this client
+func CheckDuplicateNCF(ctx context.Context, clienteID, ncf string) (bool, error) {
+	if Pool == nil || ncf == "" {
+		return false, nil
+	}
+	var count int
+	err := Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM facturas_clientes WHERE cliente_id = $1::uuid AND ncf = $2 AND ncf != ''",
+		clienteID, ncf).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// GetClientRNC gets the RNC of a client from the clientes table
+func GetClientRNC(ctx context.Context, clienteID string) (string, error) {
+	if Pool == nil {
+		return "", ErrNoDatabase
+	}
+	var rnc string
+	err := Pool.QueryRow(ctx, "SELECT COALESCE(rnc, '') FROM clientes WHERE id = $1::uuid", clienteID).Scan(&rnc)
+	return strings.ReplaceAll(rnc, "-", ""), err
 }
 
 // DeleteClientInvoice - Eliminar factura de un cliente
