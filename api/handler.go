@@ -474,13 +474,19 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// === VALIDACION 2: Receptor RNC no coincide con cliente ===
-		// Se guarda la factura pero se advierte al usuario
+		// === VALIDACION 2: Receptor RNC — advertencia DGII ===
+		// Se guarda la factura siempre, pero se advierte si el RNC no sirve para devengar impuestos
 		clientRNC, _ := db.GetClientRNC(ctx, claims.UserID)
-		if clientRNC != "" && invoice.RNCReceptor != "" {
-			normalizedReceptorRNC := strings.ReplaceAll(invoice.RNCReceptor, "-", "")
-			if clientRNC != normalizedReceptorRNC {
-				rncMismatchWarning = fmt.Sprintf("Nota: Esta factura tiene RNC receptor %s, pero su RNC es %s. Se guardó de todas formas.", invoice.RNCReceptor, clientRNC)
+		if clientRNC != "" {
+			if invoice.RNCReceptor == "" {
+				// Factura sin RNC receptor
+				rncMismatchWarning = fmt.Sprintf("Esta factura no tiene RNC receptor. Sin este dato (su RNC: %s) no podrá devengar impuestos en la DGII.", clientRNC)
+			} else {
+				normalizedReceptorRNC := strings.ReplaceAll(invoice.RNCReceptor, "-", "")
+				if clientRNC != normalizedReceptorRNC {
+					// RNC receptor no coincide con el usuario logueado
+					rncMismatchWarning = fmt.Sprintf("El RNC receptor de esta factura (%s) no coincide con su RNC (%s). Sin el RNC correcto no podrá devengar impuestos en la DGII.", invoice.RNCReceptor, clientRNC)
+				}
 			}
 		}
 
