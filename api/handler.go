@@ -78,6 +78,13 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	// === SHAREPOINT SYNC MONITORING ===
 	router.Handle("/api/admin/sharepoint-queue", auth.RequireRole("admin")(http.HandlerFunc(h.GetSharePointQueueStatus))).Methods("GET")
 
+	// === FORMATO 606 DGII ===
+	router.HandleFunc("/api/formato-606/{rnc_receptor}/preview", h.GetFormato606Preview).Methods("GET")
+	router.HandleFunc("/api/formato-606/{rnc_receptor}/validate", h.ValidateFormato606).Methods("POST")
+	router.HandleFunc("/api/formato-606/{rnc_receptor}", h.GetFormato606).Methods("GET")
+	router.HandleFunc("/api/formato-606/factura/{id}/toggle-aplica606", h.ToggleAplica606).Methods("PUT")
+	router.HandleFunc("/api/envios-606/{id}/referencia", h.UpdateEnvio606Referencia).Methods("PUT")
+
 	return router
 }
 

@@ -520,6 +520,149 @@ func DeleteClientInvoice(ctx context.Context, clienteID, invoiceID string) error
 	return err
 }
 
+// Formato606Invoice holds the fields needed to generate DGII Formato 606 TXT
+type Formato606Invoice struct {
+	ID                    string
+	EmisorRNC             string
+	TipoIDEmisor          string
+	TipoBienServicio      string
+	NCF                   string
+	NCFModifica           string
+	FechaDocumento        *time.Time
+	FechaPago             *time.Time
+	MontoServicios        float64
+	MontoBienes           float64
+	Subtotal              float64
+	ITBIS                 float64
+	ITBISRetenido         float64
+	ITBISProporcionalidad float64
+	ITBISCosto            float64
+	ITBISPercibido        float64
+	RetencionISRTipo      *int
+	ISR                   float64
+	ISRPercibido          float64
+	ISC                   float64
+	CDTMonto              float64
+	Cargo911              float64
+	Propina               float64
+	FormaPago             string
+	Proveedor             string
+}
+
+// GetFormato606Invoices queries facturas_clientes for 606-eligible invoices
+func GetFormato606Invoices(ctx context.Context, rncReceptor, periodo string) ([]Formato606Invoice, error) {
+	if Pool == nil {
+		return nil, ErrNoDatabase
+	}
+
+	rows, err := Pool.Query(ctx, `
+		SELECT id, COALESCE(emisor_rnc,''), COALESCE(tipo_id_emisor,''), COALESCE(tipo_bien_servicio,''),
+		       COALESCE(ncf,''), COALESCE(ncf_modifica,''),
+		       fecha_documento, fecha_pago,
+		       COALESCE(monto_servicios,0), COALESCE(monto_bienes,0),
+		       COALESCE(subtotal,0), COALESCE(itbis,0), COALESCE(itbis_retenido,0),
+		       COALESCE(itbis_proporcionalidad,0), COALESCE(itbis_costo,0),
+		       COALESCE(itbis_percibido,0),
+		       retencion_isr_tipo, COALESCE(isr,0),
+		       COALESCE(isr_percibido,0), COALESCE(isc,0),
+		       COALESCE(cdt_monto,0), COALESCE(cargo_911,0), COALESCE(propina,0),
+		       COALESCE(forma_pago,''),
+		       COALESCE(proveedor,'')
+		FROM facturas_clientes
+		WHERE REPLACE(COALESCE(receptor_rnc,''),'-','') = $1
+		  AND to_char(fecha_documento, 'YYYYMM') = $2
+		  AND (estado IS NULL OR estado != 'eliminada')
+		  AND aplica_606 = true
+		ORDER BY fecha_documento, id
+	`, rncReceptor, periodo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var invoices []Formato606Invoice
+	for rows.Next() {
+		var inv Formato606Invoice
+		err := rows.Scan(
+			&inv.ID, &inv.EmisorRNC, &inv.TipoIDEmisor, &inv.TipoBienServicio,
+			&inv.NCF, &inv.NCFModifica,
+			&inv.FechaDocumento, &inv.FechaPago,
+			&inv.MontoServicios, &inv.MontoBienes,
+			&inv.Subtotal, &inv.ITBIS, &inv.ITBISRetenido,
+			&inv.ITBISProporcionalidad, &inv.ITBISCosto,
+			&inv.ITBISPercibido,
+			&inv.RetencionISRTipo, &inv.ISR,
+			&inv.ISRPercibido, &inv.ISC,
+			&inv.CDTMonto, &inv.Cargo911, &inv.Propina,
+			&inv.FormaPago,
+			&inv.Proveedor,
+		)
+		if err != nil {
+			return nil, err
+		}
+		invoices = append(invoices, inv)
+	}
+	return invoices, nil
+}
+
+// InsertEnvio606 inserts a new entry into envios_606 and returns its id.
+// empresaID may be empty ("") if not known — pass nil in that case.
+func InsertEnvio606(ctx context.Context, empresaID, rnc, periodo, archivoTXT, archivoNombre string, cantRegistros int, totalMonto, totalITBIS, totalAdelantar float64) (string, error) {
+	if Pool == nil {
+		return "", ErrNoDatabase
+	}
+
+	var empresaIDArg interface{}
+	if empresaID != "" {
+		empresaIDArg = empresaID
+	}
+
+	var id string
+	err := Pool.QueryRow(ctx, `
+		INSERT INTO envios_606 (empresa_id, rnc, periodo, archivo_txt, archivo_nombre,
+		                        cantidad_registros, total_monto_facturado, total_itbis_facturado,
+		                        total_itbis_por_adelantar, estado)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, 'generado')
+		RETURNING id
+	`, empresaIDArg, rnc, periodo, archivoTXT, archivoNombre,
+		cantRegistros, totalMonto, totalITBIS, totalAdelantar).Scan(&id)
+	return id, err
+}
+
+// UpdateEnvio606Referencia updates the DGII reference and status for an envio.
+// estado must be one of: generado, enviado, completado, rechazado, anulado
+func UpdateEnvio606Referencia(ctx context.Context, envioID, referenciaDGII, estado string) error {
+	if Pool == nil {
+		return ErrNoDatabase
+	}
+	// Default to 'enviado' if caller sends an unrecognized value
+	validEstados := map[string]bool{"generado": true, "enviado": true, "completado": true, "rechazado": true, "anulado": true}
+	if !validEstados[estado] {
+		estado = "enviado"
+	}
+	_, err := Pool.Exec(ctx, `
+		UPDATE envios_606
+		SET referencia_dgii = $1,
+		    estado = $2,
+		    fecha_envio = NOW()
+		WHERE id = $3::uuid
+	`, referenciaDGII, estado, envioID)
+	return err
+}
+
+// ToggleAplica606 updates the aplica_606 flag on a specific factura
+func ToggleAplica606(ctx context.Context, clienteID, invoiceID string, aplica606 bool) error {
+	if Pool == nil {
+		return ErrNoDatabase
+	}
+	_, err := Pool.Exec(ctx, `
+		UPDATE facturas_clientes
+		SET aplica_606 = $1
+		WHERE id = $2::uuid AND cliente_id = $3::uuid
+	`, aplica606, invoiceID, clienteID)
+	return err
+}
+
 // UpdateClientInvoice - Actualizar campos extraídos de una factura (reprocesamiento)
 func UpdateClientInvoice(ctx context.Context, clienteID, invoiceID string, inv *ClientInvoice) error {
 	if Pool == nil {
