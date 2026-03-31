@@ -75,6 +75,9 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	// === VALIDACION IMPUESTOS DGII ===
 	router.HandleFunc("/api/v1/invoices/validate", h.ValidateInvoiceTaxes).Methods("POST")
 
+	// Error reporting endpoint (no auth required - receives errors from mobile app)
+	router.HandleFunc("/api/errors", h.ReceiveErrorReport).Methods("POST")
+
 	// === SHAREPOINT SYNC MONITORING ===
 	router.Handle("/api/admin/sharepoint-queue", auth.RequireRole("admin")(http.HandlerFunc(h.GetSharePointQueueStatus))).Methods("GET")
 
@@ -1048,4 +1051,37 @@ func (h *Handler) GetSharePointQueueStatus(w http.ResponseWriter, r *http.Reques
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(result)
+}
+
+// ReceiveErrorReport receives error reports from the mobile app
+func (h *Handler) ReceiveErrorReport(w http.ResponseWriter, r *http.Request) {
+	var report struct {
+		Message   string                 `json:"message"`
+		Stack     string                 `json:"stack"`
+		Context   map[string]interface{} `json:"context"`
+		Timestamp string                 `json:"timestamp"`
+		Level     string                 `json:"level"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+		sendJSON(w, 200, map[string]string{"status": "ok", "note": "invalid json ignored"})
+		return
+	}
+
+	// Log to stdout always
+	log.Printf("[ERROR_REPORT] level=%s message=%s", report.Level, report.Message)
+
+	// Save to DB if available
+	if db.Pool != nil {
+		ctx := r.Context()
+		contextJSON, _ := json.Marshal(report.Context)
+		_, err := db.Pool.Exec(ctx,
+			`INSERT INTO error_logs (message, stack, context, level, source) VALUES ($1, $2, $3, $4, 'mobile')`,
+			report.Message, report.Stack, contextJSON, report.Level)
+		if err != nil {
+			log.Printf("[ERROR_REPORT] Failed to save to DB: %v", err)
+		}
+	}
+
+	sendJSON(w, 200, map[string]string{"status": "received"})
 }

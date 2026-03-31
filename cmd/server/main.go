@@ -41,6 +41,22 @@ func main() {
 		if dbErr != nil {
 			log.Printf("Warning: Database not available after %d attempts: %v", maxRetries, dbErr)
 			log.Println("Running in OCR-only mode (no persistence)")
+			// Background reconnection goroutine
+			go func() {
+				for {
+					time.Sleep(30 * time.Second)
+					if db.Pool != nil {
+						return // Already connected
+					}
+					log.Println("Attempting database reconnection...")
+					if err := db.Init(); err == nil {
+						log.Println("Database reconnected successfully!")
+						return
+					} else {
+						log.Printf("Database reconnection failed: %v", err)
+					}
+				}
+			}()
 		}
 	}
 

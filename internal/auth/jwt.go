@@ -85,7 +85,7 @@ func ValidateToken(tokenString string) (*Claims, error) {
 func JWTMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip auth for health check, login, and image proxy (UUID-protected)
-		if r.URL.Path == "/health" || r.URL.Path == "/api/health" || r.URL.Path == "/api/login" || r.URL.Path == "/api/clientes/login/" || strings.HasSuffix(r.URL.Path, "/imagen") {
+		if r.URL.Path == "/health" || r.URL.Path == "/api/health" || r.URL.Path == "/api/login" || r.URL.Path == "/api/clientes/login/" || r.URL.Path == "/api/errors" || strings.HasSuffix(r.URL.Path, "/imagen") {
 			next.ServeHTTP(w, r)
 			return
 		}
