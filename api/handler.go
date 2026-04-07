@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -342,6 +343,32 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 	totalDuration := time.Since(startTime).Seconds()
 
 	if err != nil {
+		if errors.Is(err, ai.ErrAllProvidersFailed) {
+			// All AI providers failed transiently — save invoice for manual review
+			// The image is already in MinIO (uploaded before processInvoice was called)
+			log.Printf("[OCR] All AI providers failed: %v. Saving as revision_manual.", err)
+			if db.Pool != nil && imagenURL != "" {
+				manualInvoice := &db.ClientInvoice{
+					ClienteID:        claims.UserID,
+					ArchivoURL:       imagenURL,
+					ArchivoNombre:    "factura_scan.jpg",
+					Estado:           "procesado",
+					ExtractionStatus: "revision_manual",
+					ReviewNotes:      fmt.Sprintf(`{"error":"all_providers_failed","detail":%q}`, err.Error()),
+				}
+				if saveErr := db.SaveClientInvoice(ctx, manualInvoice); saveErr != nil {
+					log.Printf("[OCR] Failed to save revision_manual invoice: %v", saveErr)
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success":           true,
+				"extraction_status": "revision_manual",
+				"user_message":      "Tu factura fue guardada. La IA no está disponible temporalmente. Un contador la revisará pronto.",
+				"totalDuration":     time.Since(startTime).Seconds(),
+			})
+			return
+		}
 		response := models.ProcessResponse{
 			Success:       false,
 			Error:         err.Error(),
@@ -946,10 +973,20 @@ func (h *Handler) createProvider(providerName, modelName string) (ai.Provider, e
 		if model == "" {
 			model = h.config.AI.OpenAI.Model
 		}
-		return ai.NewOpenAIProvider(
+		primary := ai.NewOpenAIProvider(
 			h.config.AI.OpenAI.APIKey,
 			h.config.AI.OpenAI.BaseURL,
 			model,
+		)
+		// Fallback: openrouter-gemma-27b — free vision model via CLIProxy
+		fallback := ai.NewOpenAIProvider(
+			h.config.AI.OpenAI.APIKey,
+			h.config.AI.OpenAI.BaseURL,
+			"openrouter-gemma-27b",
+		)
+		return ai.NewFallbackProvider(
+			ai.NamedProvider(model, primary),
+			ai.NamedProvider("openrouter-gemma-27b", fallback),
 		), nil
 
 	case "gemini":

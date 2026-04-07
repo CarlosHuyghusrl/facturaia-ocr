@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,72 @@ import (
 	"github.com/sashabaranov/go-openai"
 	"google.golang.org/api/option"
 )
+
+// ErrAllProvidersFailed is returned when all providers in the fallback chain have exhausted
+var ErrAllProvidersFailed = errors.New("all AI providers failed")
+
+// isCooldownError detects transient errors (rate limit, quota, service unavailable)
+func isCooldownError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	keywords := []string{
+		"cooldown", "quota", "rate_limit", "rate limit",
+		"429", "too many requests", "resource exhausted",
+		"model_overloaded", "overloaded",
+		"503", "502", "service unavailable", "temporarily unavailable",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// namedProvider wraps a Provider with a display name for logging
+type namedProvider struct {
+	name     string
+	provider Provider
+}
+
+// NamedProvider wraps a provider with a name
+func NamedProvider(name string, p Provider) namedProvider {
+	return namedProvider{name: name, provider: p}
+}
+
+// FallbackProvider tries multiple providers in order.
+// Falls back on transient errors (rate limit, quota, service unavailable).
+// On non-transient errors, bubbles up immediately.
+// Returns ErrAllProvidersFailed (wrapping last error) when all providers fail transiently.
+type FallbackProvider struct {
+	providers []namedProvider
+}
+
+// NewFallbackProvider creates a FallbackProvider from an ordered list of named providers
+func NewFallbackProvider(providers ...namedProvider) *FallbackProvider {
+	return &FallbackProvider{providers: providers}
+}
+
+// ExtractData tries each provider in order
+func (f *FallbackProvider) ExtractData(prompt string, imageBase64 string) (string, error) {
+	var lastErr error
+	for _, np := range f.providers {
+		result, err := np.provider.ExtractData(prompt, imageBase64)
+		if err == nil {
+			if len(f.providers) > 1 {
+				fmt.Printf("[FallbackProvider] Success with provider: %s\n", np.name)
+			}
+			return result, nil
+		}
+		lastErr = err
+		fmt.Printf("[FallbackProvider] Provider %s failed: %v\n", np.name, err)
+		if !isCooldownError(err) {
+			// Non-transient error — don't try next provider, return immediately
+			return "", err
+		}
+		fmt.Printf("[FallbackProvider] Transient error on %s, trying next provider...\n", np.name)
+	}
+	return "", fmt.Errorf("%w: last error: %v", ErrAllProvidersFailed, lastErr)
+}
 
 // Provider interface for AI providers
 type Provider interface {
