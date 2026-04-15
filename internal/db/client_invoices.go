@@ -75,6 +75,8 @@ type ClientInvoice struct {
 	ITBISAdelantar float64 `json:"itbis_adelantar"`
 	ITBISPercibido float64 `json:"itbis_percibido"`
 	ISRPercibido   float64 `json:"isr_percibido"`
+	Aplica607      bool    `json:"aplica_607"`
+	Periodo607     string  `json:"periodo_607,omitempty"`
 }
 
 // ClientStats - Estadisticas para clientes
@@ -111,7 +113,8 @@ func GetClientInvoices(ctx context.Context, clienteID string, limit int) ([]Clie
 		       COALESCE(monto_servicios, 0), COALESCE(monto_bienes, 0),
 		       COALESCE(itbis_retenido_porcentaje, 0),
 		       COALESCE(aplica_606, false), COALESCE(periodo_606, ''), COALESCE(itbis_adelantar, 0),
-		       COALESCE(itbis_percibido, 0), COALESCE(isr_percibido, 0)
+		       COALESCE(itbis_percibido, 0), COALESCE(isr_percibido, 0),
+		       COALESCE(aplica_607, false), COALESCE(periodo_607, '')
 		FROM facturas_clientes
 		WHERE cliente_id = $1::uuid
 		ORDER BY created_at DESC
@@ -147,6 +150,7 @@ func GetClientInvoices(ctx context.Context, clienteID string, limit int) ([]Clie
 			&inv.ITBISRetenidoPorcentaje,
 			&inv.Aplica606, &inv.Periodo606, &inv.ITBISAdelantar,
 			&inv.ITBISPercibido, &inv.ISRPercibido,
+			&inv.Aplica607, &inv.Periodo607,
 		)
 		if err != nil {
 			return nil, err
@@ -189,7 +193,8 @@ func GetClientInvoicesPaginated(ctx context.Context, clienteID string, limit, of
 		       COALESCE(monto_servicios, 0), COALESCE(monto_bienes, 0),
 		       COALESCE(itbis_retenido_porcentaje, 0),
 		       COALESCE(aplica_606, false), COALESCE(periodo_606, ''), COALESCE(itbis_adelantar, 0),
-		       COALESCE(itbis_percibido, 0), COALESCE(isr_percibido, 0)
+		       COALESCE(itbis_percibido, 0), COALESCE(isr_percibido, 0),
+		       COALESCE(aplica_607, false), COALESCE(periodo_607, '')
 		FROM facturas_clientes
 		WHERE cliente_id = $1::uuid
 		ORDER BY created_at DESC
@@ -225,6 +230,7 @@ func GetClientInvoicesPaginated(ctx context.Context, clienteID string, limit, of
 			&inv.ITBISRetenidoPorcentaje,
 			&inv.Aplica606, &inv.Periodo606, &inv.ITBISAdelantar,
 			&inv.ITBISPercibido, &inv.ISRPercibido,
+			&inv.Aplica607, &inv.Periodo607,
 		)
 		if err != nil {
 			return nil, 0, err
@@ -316,7 +322,8 @@ func GetClientInvoiceByID(ctx context.Context, clienteID, invoiceID string) (*Cl
 		       COALESCE(monto_servicios, 0), COALESCE(monto_bienes, 0),
 		       COALESCE(itbis_retenido_porcentaje, 0),
 		       COALESCE(aplica_606, false), COALESCE(periodo_606, ''), COALESCE(itbis_adelantar, 0),
-		       COALESCE(itbis_percibido, 0), COALESCE(isr_percibido, 0)
+		       COALESCE(itbis_percibido, 0), COALESCE(isr_percibido, 0),
+		       COALESCE(aplica_607, false), COALESCE(periodo_607, '')
 		FROM facturas_clientes
 		WHERE cliente_id = $1::uuid AND id = $2::uuid
 	`
@@ -342,6 +349,7 @@ func GetClientInvoiceByID(ctx context.Context, clienteID, invoiceID string) (*Cl
 		&inv.ITBISRetenidoPorcentaje,
 		&inv.Aplica606, &inv.Periodo606, &inv.ITBISAdelantar,
 		&inv.ITBISPercibido, &inv.ISRPercibido,
+		&inv.Aplica607, &inv.Periodo607,
 	)
 	if err != nil {
 		return nil, err

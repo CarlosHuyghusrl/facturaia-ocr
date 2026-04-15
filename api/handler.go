@@ -820,6 +820,10 @@ func (h *Handler) UpdateInvoice(w http.ResponseWriter, r *http.Request) {
 		"subtotal":         true,
 		"itbis":            true,
 		"total":            true,
+		"aplica_606":       true,
+		"aplica_607":       true,
+		"periodo_606":      true,
+		"periodo_607":      true,
 	}
 	filtered := make(map[string]interface{})
 	for k, v := range updates {
