@@ -594,7 +594,9 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := db.SaveClientInvoice(ctx, clientInvoice); err != nil {
-			fmt.Printf("Warning: failed to save client invoice to DB: %v\n", err)
+			log.Printf("ERROR SaveClientInvoice: %v (cliente_id=%s emisor_rnc=%s ncf=%s monto=%v)", err, clientInvoice.ClienteID, clientInvoice.EmisorRNC, clientInvoice.NCF, clientInvoice.Monto)
+			http.Error(w, fmt.Sprintf("DB save failed: %v", err), http.StatusInternalServerError)
+			return
 		} else {
 			savedClientInvoice = clientInvoice
 

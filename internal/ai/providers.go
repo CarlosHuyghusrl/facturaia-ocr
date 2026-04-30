@@ -12,9 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/generative-ai-go/genai"
 	"github.com/sashabaranov/go-openai"
-	"google.golang.org/api/option"
 )
 
 // ErrAllProvidersFailed is returned when all providers in the fallback chain have exhausted
@@ -203,66 +201,111 @@ func NewGeminiProvider(apiKey, model string) *GeminiProvider {
 	}
 }
 
-// ExtractData sends prompt and image to Gemini
+// ExtractData sends prompt and image to Gemini via REST API with thinkingBudget=0 (faster)
 func (p *GeminiProvider) ExtractData(prompt string, imageBase64 string) (string, error) {
-	ctx := context.Background()
-
-	client, err := genai.NewClient(ctx, option.WithAPIKey(p.apiKey))
-	if err != nil {
-		return "", fmt.Errorf("failed to create Gemini client: %w", err)
+	type inlineData struct {
+		MIMEType string `json:"mimeType"`
+		Data     string `json:"data"`
 	}
-	defer client.Close()
+	type part struct {
+		Text       string      `json:"text,omitempty"`
+		InlineData *inlineData `json:"inlineData,omitempty"`
+	}
+	type content struct {
+		Parts []part `json:"parts"`
+	}
+	type thinkingCfg struct {
+		ThinkingBudget int `json:"thinkingBudget"`
+	}
+	type genCfg struct {
+		ResponseMIMEType string      `json:"responseMimeType,omitempty"`
+		Temperature      float32     `json:"temperature"`
+		ThinkingConfig   thinkingCfg `json:"thinkingConfig"`
+	}
+	type reqBody struct {
+		Contents         []content `json:"contents"`
+		GenerationConfig genCfg    `json:"generationConfig"`
+	}
 
-	model := client.GenerativeModel(p.model)
-	model.GenerationConfig.ResponseMIMEType = "application/json"
+	parts := []part{{Text: prompt}}
 
-	// Build parts
-	parts := []genai.Part{genai.Text(prompt)}
-
-	// Add image if provided
 	if imageBase64 != "" {
-		// Remove data URI prefix if present
 		imageData := imageBase64
 		if strings.HasPrefix(imageData, "data:image") {
-			parts := strings.Split(imageData, ",")
-			if len(parts) > 1 {
-				imageData = parts[1]
+			split := strings.Split(imageData, ",")
+			if len(split) > 1 {
+				imageData = split[1]
 			}
 		}
-
-		// Decode base64
 		imageBytes, err := decodeBase64(imageData)
 		if err != nil {
 			return "", fmt.Errorf("failed to decode image: %w", err)
 		}
-
-		// Detect MIME type
 		mimeType := detectMIMEType(imageBytes)
-
-		blob := genai.Blob{
-			MIMEType: mimeType,
-			Data:     imageBytes,
-		}
-
-		parts = append(parts, blob)
+		parts = append(parts, part{
+			InlineData: &inlineData{
+				MIMEType: mimeType,
+				Data:     base64.StdEncoding.EncodeToString(imageBytes),
+			},
+		})
 	}
 
-	// Generate content
-	resp, err := model.GenerateContent(ctx, parts...)
+	body := reqBody{
+		Contents: []content{{Parts: parts}},
+		GenerationConfig: genCfg{
+			ResponseMIMEType: "application/json",
+			Temperature:      0,
+			ThinkingConfig:   thinkingCfg{ThinkingBudget: 0},
+		},
+	}
+
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal Gemini request: %w", err)
+	}
+
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", p.model, p.apiKey)
+	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return "", fmt.Errorf("failed to create Gemini HTTP request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpClient := &http.Client{Timeout: 120 * time.Second}
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return "", fmt.Errorf("Gemini API call failed: %w", err)
 	}
+	defer resp.Body.Close()
 
-	if len(resp.Candidates) == 0 {
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read Gemini response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Gemini API error %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var parsed struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(respBytes, &parsed); err != nil {
+		return "", fmt.Errorf("failed to parse Gemini response: %w", err)
+	}
+	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
 		return "", fmt.Errorf("no response from Gemini")
 	}
 
-	// Extract text from first candidate
 	var result string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		result += fmt.Sprintf("%s", part)
+	for _, p := range parsed.Candidates[0].Content.Parts {
+		result += p.Text
 	}
-
 	return result, nil
 }
 

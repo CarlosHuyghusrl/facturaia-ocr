@@ -178,6 +178,27 @@ func (v *TaxValidator) validateITBIS(input *InvoiceInput, result *ValidationResu
 		return
 	}
 
+	// Skip si la factura tiene productos exentos, ISC, o monto no facturable
+	// (mezcla de exento+gravado hace que ITBIS no sea exactamente 18% del total)
+	if input.ITBISExento > 0 || input.MontoNoFacturable > 0 || input.ISCMonto > 0 {
+		// Solo emitir warning, no error
+		diff := math.Abs(input.ITBISFacturado - itbisEsperado)
+		toleranceAmount := baseGravada * v.tolerance
+		if diff > toleranceAmount {
+			result.Warnings = append(result.Warnings, ValidationWarning{
+				Field:   "itbis_facturado",
+				Code:    "itbis_mismatch_exento_isc",
+				Message: "ITBIS no coincide con 18% strict (factura tiene exentos/ISC/no facturable, normal)",
+			})
+		}
+		return
+	}
+
+	// Skip si categoria ISC = "seguros" — ISC seguros tiene reglas distintas
+	if input.ISCCategoria == "seguros" {
+		return
+	}
+
 	diff := math.Abs(input.ITBISFacturado - itbisEsperado)
 	toleranceAmount := baseGravada * v.tolerance
 
@@ -440,7 +461,7 @@ func (v *TaxValidator) validateISCSeguros(input *InvoiceInput, result *Validatio
 
 // validateNotaCredito checks that credit notes reference the original invoice NCF
 func (v *TaxValidator) validateNotaCredito(input *InvoiceInput, result *ValidationResult) {
-	notaCreditoTypes := map[string]bool{"B04": true, "E32": true, "E33": true}
+	notaCreditoTypes := map[string]bool{"B04": true, "E33": true, "E34": true}
 	if !notaCreditoTypes[input.TipoNCF] {
 		return
 	}
