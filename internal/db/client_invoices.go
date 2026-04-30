@@ -671,6 +671,65 @@ func ToggleAplica606(ctx context.Context, clienteID, invoiceID string, aplica606
 	return err
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Formato 608 — NCF Anulados (DGII)
+// Spec: Norma General 06-2018; instructivo §12 dgii-fiscal skill
+// Columnas oficiales: NCF, FECHA_COMPROBANTE, TIPO_ANULACION (3 cols).
+// FechaAnulacion se agrega como columna informativa (4 cols) para conciliación
+// interna; al exportar TXT puro DGII se debe omitir si la versión OFV lo rechaza.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Formato608Invoice holds the fields needed to generate DGII Formato 608 TXT.
+type Formato608Invoice struct {
+	ID               string
+	NCF              string
+	FechaComprobante *time.Time
+	FechaAnulacion   *time.Time
+	TipoAnulacion    string
+}
+
+// GetFormato608Invoices queries facturas_clientes for 608-eligible (anuladas) invoices.
+// Filtra por empresa (RNC del receptor/empresa contribuyente) y periodo YYYYMM.
+func GetFormato608Invoices(ctx context.Context, rncEmpresa, periodo string) ([]Formato608Invoice, error) {
+	if Pool == nil {
+		return nil, ErrNoDatabase
+	}
+
+	rows, err := Pool.Query(ctx, `
+		SELECT id,
+		       COALESCE(ncf,''),
+		       fecha_documento,
+		       fecha_anulacion,
+		       COALESCE(tipo_anulacion,'')
+		FROM facturas_clientes
+		WHERE empresa_id IN (
+		        SELECT id FROM empresas
+		        WHERE REPLACE(COALESCE(rnc,''),'-','') = $1
+		      )
+		  AND aplica_608 = true
+		  AND COALESCE(periodo_608,'') = $2
+		ORDER BY fecha_anulacion NULLS LAST, fecha_documento, id
+	`, rncEmpresa, periodo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var invoices []Formato608Invoice
+	for rows.Next() {
+		var inv Formato608Invoice
+		if err := rows.Scan(
+			&inv.ID, &inv.NCF,
+			&inv.FechaComprobante, &inv.FechaAnulacion,
+			&inv.TipoAnulacion,
+		); err != nil {
+			return nil, err
+		}
+		invoices = append(invoices, inv)
+	}
+	return invoices, nil
+}
+
 // UpdateClientInvoice - Actualizar campos extraídos de una factura (reprocesamiento)
 func UpdateClientInvoice(ctx context.Context, clienteID, invoiceID string, inv *ClientInvoice) error {
 	if Pool == nil {

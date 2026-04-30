@@ -505,6 +505,86 @@ func (h *Handler) ToggleAplica606(w http.ResponseWriter, r *http.Request) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 608 Line builder — NCF Anulados
+// Columnas oficiales DGII (Norma General 06-2018, instructivo §12 dgii-fiscal):
+//   1 NCF
+//   2 FECHA_COMPROBANTE  (YYYYMMDD)
+//   3 TIPO_ANULACION     (código 01..09)
+// Aquí se añade columna 4 FECHA_ANULACION (YYYYMMDD) por requerimiento interno.
+// Si el portal OFV rechaza la 4ª columna, omitir antes de subir.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func build608Line(inv db.Formato608Invoice) string {
+	tipoAnul := inv.TipoAnulacion
+	if tipoAnul == "" {
+		tipoAnul = "01" // default: deterioro de comprobante
+	}
+	parts := []string{
+		inv.NCF,
+		fmtFecha(inv.FechaComprobante),
+		fmtFecha(inv.FechaAnulacion),
+		tipoAnul,
+	}
+	return strings.Join(parts, "|")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Handler: GET /api/formato-608/{rnc}?periodo=YYYYMM  (download TXT)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (h *Handler) GetFormato608(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if _, err := auth.GetClaimsFromContext(ctx); err != nil {
+		h.sendError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if db.Pool == nil {
+		sendAppError(w, ErrDBUnavailable)
+		return
+	}
+
+	vars := mux.Vars(r)
+	rnc := cleanRNC(vars["rnc"])
+	if rnc == "" {
+		h.sendError(w, http.StatusBadRequest, "rnc requerido")
+		return
+	}
+	periodo := r.URL.Query().Get("periodo")
+	if len(periodo) != 6 {
+		h.sendError(w, http.StatusBadRequest, "periodo requerido en formato YYYYMM")
+		return
+	}
+
+	invoices, err := db.GetFormato608Invoices(ctx, rnc, periodo)
+	if err != nil {
+		log.Printf("GetFormato608: DB error: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "error consultando facturas anuladas")
+		return
+	}
+
+	if len(invoices) == 0 {
+		h.sendError(w, http.StatusNotFound, "sin NCF anulados para el periodo")
+		return
+	}
+
+	// Cabecera DGII: 608|{rnc}|{periodo}|{cantidad}
+	lines := make([]string, 0, len(invoices)+1)
+	lines = append(lines, fmt.Sprintf("608|%s|%s|%d", rnc, periodo, len(invoices)))
+	for _, inv := range invoices {
+		lines = append(lines, build608Line(inv))
+	}
+	contenido := strings.Join(lines, "\n") + "\n"
+	filename := fmt.Sprintf("DGII_F_608_%s_%s.TXT", rnc, periodo)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, contenido)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Handler: PUT /api/envios-606/{id}/referencia
 // ─────────────────────────────────────────────────────────────────────────────
 

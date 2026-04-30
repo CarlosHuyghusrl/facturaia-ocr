@@ -89,6 +89,9 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/formato-606/factura/{id}/toggle-aplica606", h.ToggleAplica606).Methods("PUT")
 	router.HandleFunc("/api/envios-606/{id}/referencia", h.UpdateEnvio606Referencia).Methods("PUT")
 
+	// === FORMATO 608 DGII (NCF Anulados) ===
+	router.HandleFunc("/api/formato-608/{rnc}", h.GetFormato608).Methods("GET")
+
 	return router
 }
 
