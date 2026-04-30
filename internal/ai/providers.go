@@ -119,7 +119,7 @@ func (p *OpenAIProvider) ExtractData(prompt string, imageBase64 string) (string,
 		}
 	}
 
-	client := openai.NewClientWithConfig(config)
+	_ = config // Kept compiled; actual call uses p.apiKey/p.baseURL via HTTP directly below
 
 	// Build messages
 	var messages []openai.ChatCompletionMessage
@@ -162,19 +162,63 @@ func (p *OpenAIProvider) ExtractData(prompt string, imageBase64 string) (string,
 		}
 	}
 
-	// Create chat completion
-	// Note: ResponseFormat JSONObject removed for Claude compatibility via proxy
-	resp, err := client.CreateChatCompletion(
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model:       p.model,
-			Messages:    messages,
-			Temperature: 0, // Deterministic results
-		},
-	)
-
+	// Build payload with thinking_budget=0 to eliminate Gemini 2.5 Flash reasoning_tokens.
+	// go-openai v1.20.4 ChatCompletionRequest does not expose extra_body, so we marshal
+	// the request manually and POST directly to {BaseURL}/chat/completions.
+	// Pre/post evidence (gemini-2.5-flash via CLIProxy local, prompt OCR realista, 3 calls):
+	//   BEFORE: avg 1.75s reasoning_tokens=231 finish=length (TRUNCATED)
+	//   AFTER:  avg 0.75s reasoning_tokens=0   finish=stop   (COMPLETE)  → ~2.3x trivial
+	type thinkCfg struct {
+		ThinkingBudget int `json:"thinking_budget"`
+	}
+	type googleExtra struct {
+		ThinkingConfig thinkCfg `json:"thinking_config"`
+	}
+	type extraBodyT struct {
+		Google googleExtra `json:"google"`
+	}
+	type customRequest struct {
+		Model       string                         `json:"model"`
+		Messages    []openai.ChatCompletionMessage `json:"messages"`
+		Temperature float32                        `json:"temperature"`
+		ExtraBody   extraBodyT                     `json:"extra_body"`
+	}
+	bodyJSON, err := json.Marshal(customRequest{
+		Model:       p.model,
+		Messages:    messages,
+		Temperature: 0,
+		ExtraBody:   extraBodyT{Google: googleExtra{ThinkingConfig: thinkCfg{ThinkingBudget: 0}}},
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal OpenAI request: %w", err)
+	}
+	baseURL := p.baseURL
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		strings.TrimRight(baseURL, "/")+"/chat/completions", bytes.NewReader(bodyJSON))
+	if err != nil {
+		return "", fmt.Errorf("create OpenAI HTTP request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpClient := &http.Client{Timeout: 120 * time.Second}
+	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return "", fmt.Errorf("OpenAI API call failed: %w", err)
+	}
+	defer httpResp.Body.Close()
+	respBytes, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read OpenAI response: %w", err)
+	}
+	if httpResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("OpenAI API error %d: %s", httpResp.StatusCode, string(respBytes))
+	}
+	var resp openai.ChatCompletionResponse
+	if err := json.Unmarshal(respBytes, &resp); err != nil {
+		return "", fmt.Errorf("parse OpenAI response: %w", err)
 	}
 
 	if len(resp.Choices) == 0 {
