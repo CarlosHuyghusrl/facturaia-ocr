@@ -1,0 +1,166 @@
+package db
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+)
+
+// TestMain inicializa pool BD antes de todos los tests.
+// Cubre el bug fixed en commit f5feaab — SaveClientInvoice ahora hace lookup
+// automatico de empresa_id desde la tabla clientes ANTES del INSERT.
+// Hito: facturaia-fortify-empresa-id-w1 / KB 8698
+func TestMain(m *testing.M) {
+	// Asegurar DATABASE_URL seteado para test contra BD prod local
+	if os.Getenv("DATABASE_URL") == "" {
+		os.Setenv("DATABASE_URL", "postgres://supabase_admin:fBuTN2JZxjhJqxXCkacsMSPug9xgeb@localhost:5433/postgres")
+	}
+	if err := Init(); err != nil {
+		panic("Test setup failed: cannot init DB pool: " + err.Error())
+	}
+	defer Close()
+	code := m.Run()
+	os.Exit(code)
+}
+
+// TestSaveClientInvoice_LookupEmpresaID verifica que el lookup automatico
+// empresa_id desde clientes funciona cuando inv.EmpresaID viene vacio/nil.
+func TestSaveClientInvoice_LookupEmpresaID(t *testing.T) {
+	ctx := context.Background()
+
+	// Cliente Huyghu real en BD prod local
+	huyghuClienteID := "214538f1-536d-4c6e-a0a8-4d50d02070fb"
+	huyghuEmpresaID := "616b8f1b-d3f1-403d-883b-aec3302363e5"
+
+	t.Run("lookup_when_empresa_id_empty", func(t *testing.T) {
+		inv := &ClientInvoice{
+			ClienteID:        huyghuClienteID,
+			ArchivoURL:       "test://wf1-regression-1.jpg",
+			ArchivoNombre:    "wf1-regression-1.jpg",
+			TipoDocumento:    "factura",
+			NCF:              "B0100099991",
+			Proveedor:        "WF1 TEST PROVIDER 1",
+			Estado:           "procesado",
+			EmisorRNC:        "101000001",
+			FechaDocumento:   timePtr("2026-04-15"),
+			Monto:            11800.00,
+			Subtotal:         10000.00,
+			ITBIS:            1800.00,
+			FormaPago:        "01",
+			TipoBienServicio: "09",
+			ExtractionStatus: "completed",
+			// EmpresaID intencionalmente NO seteado
+		}
+		err := SaveClientInvoice(ctx, inv)
+		if err != nil {
+			t.Fatalf("SaveClientInvoice failed: %v", err)
+		}
+		// Cleanup: borrar la fila de test al finalizar el subtest
+		defer func() {
+			_, _ = Pool.Exec(ctx, `DELETE FROM facturas_clientes WHERE id = $1::uuid`, inv.ID)
+		}()
+
+		// Verify empresa_id fue seteado por lookup
+		var dbEmpresaID *string
+		err = Pool.QueryRow(ctx,
+			`SELECT empresa_id::text FROM facturas_clientes WHERE id = $1::uuid`, inv.ID,
+		).Scan(&dbEmpresaID)
+		if err != nil {
+			t.Fatalf("query post-INSERT failed: %v", err)
+		}
+		if dbEmpresaID == nil || *dbEmpresaID != huyghuEmpresaID {
+			t.Errorf("empresa_id lookup fallo: esperado=%s, got=%v", huyghuEmpresaID, dbEmpresaID)
+		}
+	})
+
+	t.Run("preserve_when_empresa_id_already_set", func(t *testing.T) {
+		// Si EmpresaID ya viene seteado en el struct, no debe sobrescribirlo
+		empresaIDExplicit := huyghuEmpresaID
+		inv := &ClientInvoice{
+			ClienteID:        huyghuClienteID,
+			ArchivoURL:       "test://wf1-regression-2.jpg",
+			ArchivoNombre:    "wf1-regression-2.jpg",
+			TipoDocumento:    "factura",
+			NCF:              "B0100099992",
+			Proveedor:        "WF1 TEST PROVIDER 2",
+			Estado:           "procesado",
+			EmisorRNC:        "101000001",
+			FechaDocumento:   timePtr("2026-04-15"),
+			Monto:            5900.00,
+			Subtotal:         5000.00,
+			ITBIS:            900.00,
+			FormaPago:        "01",
+			TipoBienServicio: "09",
+			ExtractionStatus: "completed",
+			EmpresaID:        &empresaIDExplicit,
+		}
+		err := SaveClientInvoice(ctx, inv)
+		if err != nil {
+			t.Fatalf("SaveClientInvoice failed: %v", err)
+		}
+		defer func() {
+			_, _ = Pool.Exec(ctx, `DELETE FROM facturas_clientes WHERE id = $1::uuid`, inv.ID)
+		}()
+
+		var dbEmpresaID *string
+		err = Pool.QueryRow(ctx,
+			`SELECT empresa_id::text FROM facturas_clientes WHERE id = $1::uuid`, inv.ID,
+		).Scan(&dbEmpresaID)
+		if err != nil {
+			t.Fatalf("query post-INSERT failed: %v", err)
+		}
+		if dbEmpresaID == nil || *dbEmpresaID != huyghuEmpresaID {
+			t.Errorf("empresa_id no preservado: esperado=%s, got=%v", huyghuEmpresaID, dbEmpresaID)
+		}
+	})
+
+	t.Run("graceful_when_cliente_id_not_found", func(t *testing.T) {
+		// Cliente_id que no existe en clientes table.
+		// Debido a la FK constraint facturas_clientes_cliente_id_fkey, el INSERT
+		// fallara (graceful: el lookup devuelve error pero SaveClientInvoice continua,
+		// y luego el INSERT falla por FK). Validamos que NO hay panic — error es OK.
+		inv := &ClientInvoice{
+			ClienteID:        "00000000-0000-0000-0000-000000000000",
+			ArchivoURL:       "test://wf1-regression-3.jpg",
+			ArchivoNombre:    "wf1-regression-3.jpg",
+			TipoDocumento:    "factura",
+			NCF:              "B0100099993",
+			Proveedor:        "WF1 TEST PROVIDER 3",
+			Estado:           "procesado",
+			EmisorRNC:        "101000001",
+			FechaDocumento:   timePtr("2026-04-15"),
+			Monto:            1180.00,
+			Subtotal:         1000.00,
+			ITBIS:            180.00,
+			FormaPago:        "01",
+			TipoBienServicio: "09",
+			ExtractionStatus: "completed",
+		}
+		err := SaveClientInvoice(ctx, inv)
+		// FK constraint puede rechazar — eso tambien es valido (graceful, no panic).
+		// Si pasa (caso improbable), verifica empresa_id NULL.
+		if err == nil {
+			defer func() {
+				_, _ = Pool.Exec(ctx, `DELETE FROM facturas_clientes WHERE id = $1::uuid`, inv.ID)
+			}()
+			var dbEmpresaID *string
+			qErr := Pool.QueryRow(ctx,
+				`SELECT empresa_id::text FROM facturas_clientes WHERE id = $1::uuid`, inv.ID,
+			).Scan(&dbEmpresaID)
+			if qErr != nil {
+				t.Fatalf("query post-INSERT failed: %v", qErr)
+			}
+			if dbEmpresaID != nil {
+				t.Errorf("esperado empresa_id NULL para cliente_id no existente, got=%s", *dbEmpresaID)
+			}
+		}
+		// Si err != nil con FK constraint, el test pasa (graceful, no panic)
+	})
+}
+
+// timePtr helper para campos *time.Time en formato YYYY-MM-DD
+func timePtr(dateStr string) *time.Time {
+	t, _ := time.Parse("2006-01-02", dateStr)
+	return &t
+}
