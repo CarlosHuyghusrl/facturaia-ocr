@@ -89,7 +89,7 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
-	log.Printf("Starting Invoice OCR Service v2.31.0 on %s", addr)
+	log.Printf("Starting Invoice OCR Service v2.32.0 on %s", addr)
 	log.Printf("OCR Engine: %s", config.OCR.Engine)
 	log.Printf("Default AI Provider: %s", config.AI.DefaultProvider)
 	log.Printf("Database: %v", db.Pool != nil)

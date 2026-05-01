@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"time"
 )
@@ -364,9 +365,31 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 		return ErrNoDatabase
 	}
 
+	// FIX [OCR-EMPRESA-ID]: lookup empresa_id desde clientes si no viene seteado.
+	// Sin esto, las facturas escaneadas quedan con empresa_id=NULL y los formularios
+	// DGII de gestoriard (filtran por tenant context) no las muestran.
+	if (inv.EmpresaID == nil || *inv.EmpresaID == "") && inv.ClienteID != "" {
+		var empresaID *string
+		err := Pool.QueryRow(ctx,
+			`SELECT empresa_id::text FROM clientes WHERE id = $1::uuid`,
+			inv.ClienteID).Scan(&empresaID)
+		if err != nil {
+			// Log warning pero continuar — la factura se guarda igual con empresa_id NULL
+			log.Printf("[SaveClientInvoice] Warning: empresa_id lookup failed for cliente_id=%s: %v", inv.ClienteID, err)
+		} else if empresaID != nil && *empresaID != "" {
+			inv.EmpresaID = empresaID
+		}
+	}
+
+	// NULLIF helper para evitar empty string en columna uuid
+	var empresaIDArg interface{}
+	if inv.EmpresaID != nil && *inv.EmpresaID != "" {
+		empresaIDArg = *inv.EmpresaID
+	}
+
 	query := `
 		INSERT INTO facturas_clientes (
-			cliente_id, archivo_url, archivo_nombre, archivo_size,
+			cliente_id, empresa_id, archivo_url, archivo_nombre, archivo_size,
 			tipo_documento, hora_factura, fecha_documento, monto, ncf, proveedor,
 			estado, notas_cliente,
 			emisor_rnc, receptor_nombre, receptor_rnc,
@@ -381,17 +404,17 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 			monto_servicios, monto_bienes, itbis_retenido_porcentaje,
 			itbis_percibido, isr_percibido
 		) VALUES (
-			$1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-			$12, $13, $14, $15, $16, $17, $18,
-			$19, $20, $21,
-			$22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31, $32,
-			$33, $34, $35,
-			$36, $37::jsonb, $38::jsonb,
-			$39, $40,
-			$41, $42, $43, $44, $45,
-			$46, $47, $48,
-			$49, $50
+			$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+			$13, $14, $15, $16, $17, $18, $19,
+			$20, $21, $22,
+			$23, $24, $25, $26,
+			$27, $28, $29, $30, $31, $32, $33,
+			$34, $35, $36,
+			$37, $38::jsonb, $39::jsonb,
+			$40, $41,
+			$42, $43, $44, $45, $46,
+			$47, $48, $49,
+			$50, $51
 		)
 		RETURNING id, created_at
 	`
@@ -406,7 +429,7 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 	}
 
 	err := Pool.QueryRow(ctx, query,
-		inv.ClienteID, inv.ArchivoURL, inv.ArchivoNombre, inv.ArchivoSize,
+		inv.ClienteID, empresaIDArg, inv.ArchivoURL, inv.ArchivoNombre, inv.ArchivoSize,
 		inv.TipoDocumento, inv.HoraFactura, inv.FechaDocumento, inv.Monto, inv.NCF, inv.Proveedor,
 		inv.Estado, inv.NotasCliente,
 		inv.EmisorRNC, inv.ReceptorNombre, inv.ReceptorRNC,
