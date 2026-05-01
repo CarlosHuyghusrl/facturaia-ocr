@@ -72,6 +72,10 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/facturas/{id}/imagen", h.GetClientInvoiceImage).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}", h.GetClientInvoice).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}", h.DeleteClientInvoice).Methods("DELETE")
+	// [WB1] BUG-01/BUG-03 fix — review/approve flow: escribir public.facturas_clientes
+	// para disparar triggers BD (auto_tag_factura_606 + auto_set_receptor_rnc).
+	router.HandleFunc("/api/facturas/{id}/update", h.UpdateClientInvoiceHandler).Methods("PUT")
+	router.HandleFunc("/api/facturas/{id}/approve", h.ApproveClientInvoiceHandler).Methods("PUT")
 
 	// === VALIDACION IMPUESTOS DGII ===
 	router.HandleFunc("/api/v1/invoices/validate", h.ValidateInvoiceTaxes).Methods("POST")
@@ -1130,4 +1134,334 @@ func (h *Handler) ReceiveErrorReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, 200, map[string]string{"status": "received"})
+}
+
+// =============================================================================
+// [WB1] Hito facturaia-bugs-p0-invoice-review-w2 — KB 8705 audit Wave A
+// Fixes BUG-01 (endpoint /update no existía → 404) + BUG-03 (handler legacy
+// escribía <schema>.facturas SIN triggers BD).
+//
+// Estos handlers escriben public.facturas_clientes via db.UpdateClientInvoice
+// helper, lo que dispara los triggers BD:
+//   - auto_tag_factura_606 (calcula aplica_606, periodo_606, itbis_adelantar)
+//   - auto_set_receptor_rnc (rellena receptor_rnc desde clientes.rnc)
+// =============================================================================
+
+// applyClientInvoicePayload — mapea payload JSON (nombres app/BD) sobre el
+// struct ClientInvoice cargado desde BD. Solo modifica campos del allowlist.
+// Devuelve la cantidad de campos efectivamente aplicados.
+func applyClientInvoicePayload(inv *db.ClientInvoice, payload map[string]interface{}) int {
+	applied := 0
+
+	getStr := func(v interface{}) (string, bool) {
+		if s, ok := v.(string); ok {
+			return s, true
+		}
+		return "", false
+	}
+	getFloat := func(v interface{}) (float64, bool) {
+		switch x := v.(type) {
+		case float64:
+			return x, true
+		case float32:
+			return float64(x), true
+		case int:
+			return float64(x), true
+		case int64:
+			return float64(x), true
+		case string:
+			if x == "" {
+				return 0, true
+			}
+			d, err := decimal.NewFromString(x)
+			if err == nil {
+				f, _ := d.Float64()
+				return f, true
+			}
+		}
+		return 0, false
+	}
+	getInt := func(v interface{}) (int, bool) {
+		switch x := v.(type) {
+		case float64:
+			return int(x), true
+		case int:
+			return x, true
+		case int64:
+			return int(x), true
+		case string:
+			if x == "" {
+				return 0, true
+			}
+			var i int
+			if _, err := fmt.Sscanf(x, "%d", &i); err == nil {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+	getDate := func(v interface{}) (*time.Time, bool) {
+		s, ok := getStr(v)
+		if !ok {
+			return nil, false
+		}
+		if s == "" {
+			return nil, true // null explicit
+		}
+		// Try common formats: RFC3339, YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS
+		layouts := []string{
+			time.RFC3339,
+			"2006-01-02T15:04:05",
+			"2006-01-02 15:04:05",
+			"2006-01-02",
+		}
+		for _, layout := range layouts {
+			if t, err := time.Parse(layout, s); err == nil {
+				return &t, true
+			}
+		}
+		return nil, false
+	}
+
+	for key, raw := range payload {
+		switch key {
+		case "ncf":
+			if s, ok := getStr(raw); ok {
+				inv.NCF = s
+				applied++
+			}
+		case "tipo_ncf":
+			if s, ok := getStr(raw); ok {
+				inv.TipoNCF = s
+				applied++
+			}
+		case "ncf_modifica":
+			if s, ok := getStr(raw); ok {
+				inv.NCFModifica = s
+				applied++
+			}
+		case "emisor_rnc":
+			if s, ok := getStr(raw); ok {
+				inv.EmisorRNC = s
+				applied++
+			}
+		case "emisor_nombre", "proveedor":
+			if s, ok := getStr(raw); ok {
+				inv.Proveedor = s
+				applied++
+			}
+		case "receptor_nombre":
+			if s, ok := getStr(raw); ok {
+				inv.ReceptorNombre = s
+				applied++
+			}
+		case "receptor_rnc":
+			if s, ok := getStr(raw); ok {
+				inv.ReceptorRNC = s
+				applied++
+			}
+		case "fecha_emision", "fecha_documento":
+			if t, ok := getDate(raw); ok {
+				inv.FechaDocumento = t
+				applied++
+			}
+		case "fecha_pago":
+			if t, ok := getDate(raw); ok {
+				inv.FechaPago = t
+				applied++
+			}
+		case "total_factura", "monto":
+			if f, ok := getFloat(raw); ok {
+				inv.Monto = f
+				applied++
+			}
+		case "subtotal":
+			if f, ok := getFloat(raw); ok {
+				inv.Subtotal = f
+				applied++
+			}
+		case "monto_servicios":
+			if f, ok := getFloat(raw); ok {
+				inv.MontoServicios = f
+				applied++
+			}
+		case "monto_bienes":
+			if f, ok := getFloat(raw); ok {
+				inv.MontoBienes = f
+				applied++
+			}
+		case "descuento":
+			if f, ok := getFloat(raw); ok {
+				inv.Descuento = f
+				applied++
+			}
+		case "itbis", "itbis_facturado":
+			if f, ok := getFloat(raw); ok {
+				inv.ITBIS = f
+				applied++
+			}
+		case "itbis_retenido":
+			if f, ok := getFloat(raw); ok {
+				inv.ITBISRetenido = f
+				applied++
+			}
+		case "itbis_exento":
+			if f, ok := getFloat(raw); ok {
+				inv.ITBISExento = f
+				applied++
+			}
+		case "itbis_tasa":
+			if f, ok := getFloat(raw); ok {
+				inv.ITBISTasa = f
+				applied++
+			}
+		case "itbis_retenido_porcentaje":
+			if i, ok := getInt(raw); ok {
+				inv.ITBISRetenidoPorcentaje = i
+				applied++
+			}
+		case "isc", "isc_monto":
+			if f, ok := getFloat(raw); ok {
+				inv.ISC = f
+				applied++
+			}
+		case "isc_categoria":
+			if s, ok := getStr(raw); ok {
+				inv.ISCCategoria = s
+				applied++
+			}
+		case "propina", "propina_legal":
+			if f, ok := getFloat(raw); ok {
+				inv.Propina = f
+				applied++
+			}
+		case "otros_impuestos":
+			if f, ok := getFloat(raw); ok {
+				inv.OtrosImpuestos = f
+				applied++
+			}
+		case "isr", "retencion_isr_monto":
+			if f, ok := getFloat(raw); ok {
+				inv.ISR = f
+				applied++
+			}
+		case "retencion_isr_tipo":
+			if i, ok := getInt(raw); ok {
+				inv.RetencionISRTipo = &i
+				applied++
+			}
+		case "extraction_status":
+			if s, ok := getStr(raw); ok {
+				inv.ExtractionStatus = s
+				applied++
+			}
+		case "review_notes":
+			if s, ok := getStr(raw); ok {
+				inv.ReviewNotes = s
+				applied++
+			}
+		case "forma_pago":
+			if s, ok := getStr(raw); ok {
+				inv.FormaPago = s
+				applied++
+			}
+		case "tipo_bien_servicio":
+			if s, ok := getStr(raw); ok {
+				inv.TipoBienServicio = s
+				applied++
+			}
+		case "estado":
+			if s, ok := getStr(raw); ok {
+				inv.Estado = s
+				applied++
+			}
+		}
+	}
+	return applied
+}
+
+// UpdateClientInvoiceHandler — PUT /api/facturas/{id}/update
+// Actualiza factura en facturas_clientes con triggers BD activos.
+// Auth: cliente JWT — sólo puede modificar sus propias facturas (filtro por
+// claims.UserID en helper UpdateClientInvoice).
+func (h *Handler) UpdateClientInvoiceHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	ctx := r.Context()
+
+	claims, err := auth.GetClaimsFromContext(ctx)
+	if err != nil {
+		h.sendError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if db.Pool == nil {
+		sendAppError(w, ErrDBUnavailable)
+		return
+	}
+
+	vars := mux.Vars(r)
+	invoiceID := vars["id"]
+	if invoiceID == "" {
+		h.sendError(w, http.StatusBadRequest, "missing invoice id")
+		return
+	}
+
+	var payload map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Cargar factura existente — UpdateClientInvoice helper requiere struct completo.
+	// El SELECT también valida ownership (cliente_id = claims.UserID).
+	inv, err := db.GetClientInvoiceByID(ctx, claims.UserID, invoiceID)
+	if err != nil {
+		log.Printf("[UpdateClientInvoiceHandler] not found cliente=%s invoice=%s: %v", claims.UserID, invoiceID, err)
+		h.sendError(w, http.StatusNotFound, "invoice not found")
+		return
+	}
+
+	applied := applyClientInvoicePayload(inv, payload)
+	if applied == 0 {
+		h.sendError(w, http.StatusBadRequest, "no allowed fields in payload")
+		return
+	}
+
+	if err := db.UpdateClientInvoice(ctx, claims.UserID, invoiceID, inv); err != nil {
+		log.Printf("[UpdateClientInvoiceHandler] update error cliente=%s invoice=%s: %v", claims.UserID, invoiceID, err)
+		h.sendError(w, http.StatusInternalServerError, "failed to update invoice")
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"invoice_id": invoiceID,
+		"updated":    applied,
+	})
+}
+
+// ApproveClientInvoiceHandler — PUT /api/facturas/{id}/approve
+// Marca factura como validated. Acepta mismo payload que update + fuerza
+// extraction_status='validated' antes de delegar al handler de update.
+func (h *Handler) ApproveClientInvoiceHandler(w http.ResponseWriter, r *http.Request) {
+	// Leer body (puede venir vacío en aprobaciones puras)
+	bodyBytes, _ := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+
+	payload := map[string]interface{}{}
+	if len(bodyBytes) > 0 {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			h.sendError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	// Forzar extraction_status='validated' en todos los casos
+	payload["extraction_status"] = "validated"
+
+	newBody, _ := json.Marshal(payload)
+	r.Body = io.NopCloser(bytes.NewReader(newBody))
+	r.ContentLength = int64(len(newBody))
+
+	h.UpdateClientInvoiceHandler(w, r)
 }
