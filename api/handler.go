@@ -577,9 +577,15 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// === CLASIFICACION: TipoFactura post-OCR ===
+		// Override tipoFactura según si el emisor coincide con el RNC de la empresa del usuario.
+		// Bug fix: factura 51e05b7f tenía tipoFactura='gastos' cuando emisor_rnc=131047939 (HUYGHU=empresa).
+		// Lógica: emisor_rnc == empresa_rnc → "ventas" (607); emisor_rnc != empresa_rnc → "gastos" (606).
+		clientRNC, _ := db.GetClientRNC(ctx, claims.UserID)
+		ai.ClassifyTipoFactura(invoice, clientRNC)
+
 		// === VALIDACION 2: Receptor RNC — advertencia DGII ===
 		// Se guarda la factura siempre, pero se advierte si el RNC no sirve para devengar impuestos
-		clientRNC, _ := db.GetClientRNC(ctx, claims.UserID)
 		if clientRNC != "" {
 			if invoice.RNCReceptor == "" {
 				// Factura sin RNC receptor
