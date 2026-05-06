@@ -65,163 +65,34 @@ func (e *Extractor) Extract(ocrText string, imageBase64 string) (*models.Invoice
 func (e *Extractor) buildPromptVision() string {
 	currentYear := time.Now().Year()
 
-	prompt := fmt.Sprintf(`Eres un EXPERTO en OCR y facturas fiscales de Republica Dominicana. Tu trabajo es LEER CUIDADOSAMENTE cada caracter de la imagen.
+	prompt := fmt.Sprintf(`Eres experto en facturas fiscales de Republica Dominicana. Lee la imagen y extrae datos DGII.
 
-## INSTRUCCIONES DE LECTURA
+## EMISOR vs RECEPTOR (CRITICO)
+- EMISOR = quien VENDE: aparece ARRIBA (encabezado, logo, nombre tienda, RNC, URL web)
+- RECEPTOR = quien COMPRA: aparece ABAJO despues de totales ("RNC/Cedula:", "Cliente:", nombre empresa cliente)
+- Tiendas RD conocidas (emisor): Plaza Lama, Jumbo, La Sirena, CCN, Iberia, Bravo, Nacional
+- RNC en sello circular = rncEmisor. "RNC/Cedula:" debajo de totales = rncReceptor
+- NUNCA el mismo RNC en emisor y receptor
 
-PASO 1 - EXAMINA TODA LA IMAGEN COMPLETA:
-- Mira PRIMERO el encabezado arriba (logo, nombre empresa grande, direccion, telefono)
-- Mira la parte central (items, precios, totales)
-- Mira la parte inferior (datos del comprador, e-NCF, codigo de barras)
-- Mira los sellos/timbres (pueden tener RNC dentro de un circulo)
+## FORMATOS
+- RNC empresa: 9 digitos sin guiones (ej: 131047939). Cedula: 11 digitos
+- NCF: B01/B02/B04/B15XXXXXXXXXX, E31/E32/E33XXXXXXXXXXXXX. e-NCF al final del ticket
+- ncfModifica: OBLIGATORIO si tipoNcf es B04, E32 o E33
 
-PASO 2 - IDENTIFICA EL TIPO DE DOCUMENTO:
-- TICKET DE TIENDA: Papel termico largo y angosto (supermercados, tiendas, farmacias)
-  * El EMISOR (vendedor) esta ARRIBA: logo, nombre tienda, RNC, direccion, telefono
-  * El RECEPTOR (comprador) esta ABAJO: nombre empresa, "RNC/Cedula:", telefono
-  * Pistas del emisor: URL web (www.xxx.com), "CLUB xxx", slogan, logo
-- FACTURA FORMAL: Papel carta con formato estructurado
-  * El EMISOR esta en el membrete superior
-  * El RECEPTOR dice "Cliente:", "Facturar a:", "Vendido a:"
+## IMPUESTOS
+- ITBIS: 18%% normal, 16%% zona franca. itbisRetenidoPorcentaje: 30=gran contribuyente, 100=retenedor designado, 0=sin retencion
+- ISC: seguros=16%% prima neta, telecom=10%% (Claro/Altice/Viva), alcohol/tabaco/combustibles/vehiculos=monto fijo. Busca "ISC","Imp. Selectivo"
+- CDT: 2%% telecom. Cargo 911: lineas telefonicas
+- ISR tipos: 1=Alquileres, 2=Honorarios fisicas, 3=Otros fisicas, 4=Renta presunta, 5=Loterias, 6=Juridicas, 7=Servicios, 8=Dividendos (todos 10%% salvo tipo4=25%%)
+- Propina: 10%% en restaurantes/hoteles
 
-PASO 3 - REGLA CRITICA EMISOR vs RECEPTOR:
-- EMISOR = Quien VENDE (la tienda/negocio que emite la factura)
-  * En tickets: es el negocio del ENCABEZADO (parte superior)
-  * Su RNC aparece ARRIBA cerca del logo o en un sello
-  * Si ves "www.xxx.com" o "CLUB xxx", el nombre de esa empresa es el EMISOR
-  * Tiendas conocidas RD: Plaza Lama, Jumbo, La Sirena, CCN, Iberia, Bravo, Nacional, etc.
-- RECEPTOR = Quien COMPRA (el cliente que paga)
-  * En tickets: aparece ABAJO, despues de "Total Articulos Vendidos" o "Gracias por su compra"
-  * Busca: "RNC/Cedula:", "Cliente:", "Facturar a:", "Vendido a:"
-  * Si un nombre de empresa aparece DEBAJO de los totales con "RNC/Cedula:", ESO es el RECEPTOR
+## JSON A DEVOLVER (SOLO JSON, sin markdown)
+{"ncf":"","tipoNcf":"","ncfModifica":null,"rncEmisor":"","nombreEmisor":"","tipoIdEmisor":"1","rncReceptor":"","nombreReceptor":"","tipoIdReceptor":"1","fechaFactura":"YYYY-MM-DD","horaFactura":null,"fechaVencimiento":null,"fechaPago":null,"subtotal":0,"descuento":0,"montoServicios":0,"montoBienes":0,"itbis":0,"itbisTasa":18,"itbisRetenido":0,"itbisRetenidoPorcentaje":0,"itbisExento":0,"isr":0,"retencionIsrTipo":0,"isc":0,"iscCategoria":null,"cdtMonto":0,"cargo911":0,"propina":0,"otrosImpuestos":0,"montoNoFacturable":0,"total":0,"formaPago":"01","tipoBienServicio":"01","items":[]}
 
-PASO 4 - EJEMPLO DE TICKET DOMINICANO TIPICO:
-  [Logo/Nombre Tienda]     <-- ESTO ES EL EMISOR
-  [RNC: XXXXXXXXX]         <-- rncEmisor
-  [Direccion, Tel]
-  ---
-  [Items y precios]
-  [ITBIS: X,XXX.XX]
-  [TOTAL: XX,XXX.XX]
-  ---
-  [Total Articulos Vendidos]
-  [Nombre Empresa Cliente]  <-- ESTO ES EL RECEPTOR
-  [RNC/Cedula: XXXXXXXXX]   <-- rncReceptor
-  [e-NCF: EXXXXXXXXXX]
+formaPago: 01=Efectivo,02=Cheque/Transfer,03=Tarjeta,04=Credito,05=Permuta,06=Nota Credito,07=Mixto
+tipoBienServicio: 01=Personal,02=Servicios,03=Arrendamiento,04=Activos fijos,05=Representacion,06=Deducciones,07=Financieros,08=Extraordinarios,09=Costo venta,10=Activos,11=Seguros,12=Viajes,13=Otros
 
-## FORMATO RNC DOMINICANO
-- Empresas: 9 digitos (ej: 131047939, 1-31-04793-9)
-- Personas: 11 digitos (cedula, ej: 00112345678)
-- Quita guiones al extraer: "1-31-04793-9" -> "131047939"
-- PUEDE haber DOS RNC diferentes en la factura: uno del emisor y otro del receptor
-
-## FORMATO NCF (Comprobante Fiscal)
-- Credito Fiscal: B01XXXXXXXXX (11 digitos despues de B01)
-- Consumidor Final: B02XXXXXXXXX
-- Gubernamental: B15XXXXXXXXX
-- E-CF: E31XXXXXXXXXXXXX (13 digitos despues de E31)
-- El e-NCF aparece frecuentemente al FINAL del ticket, NO confundir con datos del emisor
-
-## CAMPOS A EXTRAER
-
-Devuelve SOLO JSON valido (sin markdown, sin comentarios):
-{
-  "ncf": "el NCF completo",
-  "tipoNcf": "B01, B02, B04, B15, E31, etc",
-  "ncfModifica": "NCF original que se modifica, OBLIGATORIO si tipoNcf es B04, E32 o E33, null si no aplica",
-  "rncEmisor": "solo digitos, sin guiones - del VENDEDOR",
-  "nombreEmisor": "nombre de la tienda/empresa que VENDE",
-  "tipoIdEmisor": "1=RNC, 2=Cedula",
-  "rncReceptor": "solo digitos, sin guiones - del COMPRADOR",
-  "nombreReceptor": "nombre del cliente que COMPRA",
-  "tipoIdReceptor": "1=RNC, 2=Cedula",
-  "fechaFactura": "YYYY-MM-DD",
-  "horaFactura": "HH:MM (hora que aparece impresa en la factura, null si no se ve)",
-  "fechaVencimiento": "YYYY-MM-DD o null",
-  "fechaPago": "YYYY-MM-DD, requerida si hay retenciones ITBIS o ISR, null si no aplica",
-  "subtotal": numero (base antes de impuestos, usa 0 si no aparece),
-  "descuento": numero (descuento aplicado, usa 0 si no aparece),
-  "montoServicios": numero (monto de la parte de servicios; si la factura mezcla productos y servicios separar los montos; si solo servicios poner todo aqui; si solo bienes/productos usar 0),
-  "montoBienes": numero (monto de la parte de bienes/productos; si solo bienes poner todo aqui; si solo servicios usar 0),
-  "itbis": numero (ITBIS 18%% facturado, usa 0 si no aparece),
-  "itbisTasa": numero (18 normal o 16 zona franca, usa 18 por defecto),
-  "itbisRetenido": numero (ITBIS retenido, usa 0 si no aparece),
-  "itbisRetenidoPorcentaje": numero (30 si gran contribuyente retiene 30%%, 100 si retenedor designado retiene 100%%, 0 si no hay retencion),
-  "itbisExento": numero (monto exento de ITBIS, usa 0 si no aparece),
-  "isr": numero (ISR retenido, usa 0 si no aparece),
-  "retencionIsrTipo": numero 1-8 (tipo retencion ISR segun tabla DGII, usa 0 si no aplica),
-  "isc": numero (Impuesto Selectivo al Consumo, usa 0 si no aparece),
-  "iscCategoria": "seguros|telecom|alcohol|tabaco|vehiculos|combustibles" o null,
-  "cdtMonto": numero (Contribucion Desarrollo Telecom 2%%, usa 0 si no aparece),
-  "cargo911": numero (Contribucion al 911, usa 0 si no aparece),
-  "propina": numero (propina legal 10%%, usa 0 si no aparece),
-  "otrosImpuestos": numero (impuestos no clasificados, usa 0 si no aparece),
-  "montoNoFacturable": numero (propinas voluntarias, reembolsos, usa 0 si no aparece),
-  "total": numero final a pagar (usa 0 si no aparece, NUNCA null),
-  "formaPago": "01-07 segun codigo",
-  "tipoBienServicio": "01-13 segun codigo",
-  "items": [{"descripcion": "...", "cantidad": 1, "precioUnit": 100, "importe": 100}]
-}
-
-## GUIA DE IMPUESTOS DOMINICANOS
-
-### ITBIS (Impuesto Transferencia Bienes y Servicios)
-- 18%% normal o 16%% zona franca - busca "ITBIS", "I.T.B.I.S", "IVA"
-- itbisRetenidoPorcentaje: 30 si gran contribuyente, 100 si retenedor designado, 0 si no hay retencion
-
-### ISC (Impuesto Selectivo al Consumo) - por categoria
-- seguros: 16%% sobre prima neta (facturas de aseguradoras)
-- telecom: 10%% sobre servicio de telecomunicaciones (Claro, Altice, Viva)
-- alcohol: monto especifico por litro (no porcentaje fijo)
-- tabaco: monto especifico por unidad (no porcentaje fijo)
-- combustibles: monto fijo por galon segun tipo de combustible
-- vehiculos: monto segun categoria del vehiculo
-
-COMO IDENTIFICAR ISC EN LA FACTURA:
-- Busca exactamente las palabras: "ISC", "Imp. Selectivo", "Selectivo Consumo", "ISCA", "Impuesto Selectivo al Consumo"
-- En facturas telecom (Claro, Altice, Viva, Wind Telecom): ISC aparece como línea separada junto al ITBIS. Si ves "CDT" o "Cargo 911", hay ISC telecom del 10%%.
-- En facturas de seguros (ARS, aseguradoras): busca "Prima Neta" y calcula 16%% sobre ese valor
-- Si encuentras monto de ISC pero no puedes determinar categoría, usa "otros" como iscCategoria
-- NUNCA confundas ISC con ITBIS — son impuestos diferentes y separados en la factura
-
-### CDT y 911 (solo telecom)
-- CDT: 2%% adicional en facturas telecom - "Contribucion Desarrollo Telecomunicaciones"
-- 911: Cargo fijo en lineas telefonicas - "Contribucion 911", "Cargo 911"
-
-### ISR (Impuesto Sobre la Renta) - tipos de retencion
-- Tipo 1: Alquileres (10%%), Tipo 2: Honorarios personas fisicas (10%%)
-- Tipo 3: Otros ingresos personas fisicas (10%%), Tipo 4: Renta presunta (25%% o 27%%)
-- Tipo 5: Loterias y premios (25%%), Tipo 6: Personas juridicas (27%%)
-- Tipo 7: Servicios en general (10%%), Tipo 8: Dividendos (10%%)
-
-### Propina y ncfModifica
-- Propina: 10%% legal en restaurantes/hoteles - busca "Propina", "Servicio", "10%%"
-- ncfModifica: OBLIGATORIO si tipoNcf es B04 (Nota Credito), E32 (Nota Debito Electronica) o E33 (Nota Credito Electronica)
-
-## REGLAS CRITICAS
-
-1. LEE CARACTER POR CARACTER si el texto es dificil
-2. Los SELLOS tienen informacion importante - no los ignores
-3. Si ves un RNC en un sello circular, ESE es el rncEmisor
-4. NUNCA inventes datos - usa null si no puedes leer
-5. NUNCA copies rncEmisor a rncReceptor o viceversa
-6. NUNCA pongas el mismo RNC en emisor y receptor
-7. Si ves "RNC/Cedula:" DEBAJO de los totales, ESE es el RECEPTOR (comprador)
-8. Si ves un nombre de empresa con URL web, ESA empresa es el EMISOR (vendedor)
-9. El TOTAL siempre es el numero MAS GRANDE al final
-10. Si el encabezado esta borroso, busca pistas: URL web, "CLUB xxx", slogan, direccion
-11. Ano por defecto si no se ve: %d
-12. NUNCA devuelvas null para subtotal, itbis, o total - usa 0 si no puedes leer el valor
-13. NUNCA inventes ni calcules montos que no puedas leer en la imagen
-14. Si un campo numerico no aparece en la factura, pon 0 (no null, no calculado)
-
-## CODIGOS
-
-formaPago: 01=Efectivo, 02=Cheque/Transferencia, 03=Tarjeta, 04=Credito, 05=Permuta, 06=Nota Credito, 07=Mixto
-
-tipoBienServicio: 01=Personal, 02=Servicios, 03=Arrendamiento, 04=Activos fijos, 05=Representacion, 06=Deducciones, 07=Financieros, 08=Extraordinarios, 09=Costo venta, 10=Activos, 11=Seguros, 12=Viajes, 13=Otros
-
-AHORA ANALIZA LA IMAGEN CUIDADOSAMENTE. PRIMERO identifica quien VENDE y quien COMPRA, LUEGO extrae los datos.`, currentYear)
+REGLAS: No inventes datos (usa null/0). Campos numericos ausentes=0. Ano default=%d. Identifica EMISOR y RECEPTOR antes de extraer.`, currentYear)
 
 	return prompt
 }
