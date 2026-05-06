@@ -96,7 +96,66 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	// === FORMATO 608 DGII (NCF Anulados) ===
 	router.HandleFunc("/api/formato-608/{rnc}", h.GetFormato608).Methods("GET")
 
+	// === P1 ANTI-DUPLICADAS NCF — pre-save check ===
+	router.HandleFunc("/api/facturas/check-duplicate", h.CheckDuplicateNCF).Methods("GET")
+
 	return router
+}
+
+// CheckDuplicateNCF handles GET /api/facturas/check-duplicate?ncf=X&tipo=606|607
+//
+// Multi-tenant safety: empresa_id is derived inside the DB function from the
+// clientes table via claims.UserID (cliente_id from JWT). Never trusted from
+// query params.
+//
+// Response 200:
+//
+//	{"exists": false}
+//	{"exists": true, "existing": {"id": "...", "ncf": "...", "fecha_documento": "...", "monto": 0.0}}
+func (h *Handler) CheckDuplicateNCF(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	ctx := r.Context()
+	claims, err := auth.GetClaimsFromContext(ctx)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	ncf := r.URL.Query().Get("ncf")
+	tipo := r.URL.Query().Get("tipo") // "606" o "607"
+	if tipo != "606" && tipo != "607" {
+		tipo = "606" // default
+	}
+
+	// NCF vacío → siempre permitir (UNIQUE PARCIAL migration 20260501)
+	if ncf == "" {
+		json.NewEncoder(w).Encode(map[string]any{"exists": false})
+		return
+	}
+
+	result, err := db.CheckDuplicateNCFByTipo(ctx, claims.UserID, ncf, tipo)
+	if err != nil {
+		// DB error → fail-open: allow save + log warning (no bloquear UX)
+		log.Printf("[CheckDuplicateNCF] DB error cliente=%s ncf=%s: %v", claims.UserID, ncf, err)
+		json.NewEncoder(w).Encode(map[string]any{"exists": false})
+		return
+	}
+
+	if !result.Exists {
+		json.NewEncoder(w).Encode(map[string]any{"exists": false})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"exists": true,
+		"existing": map[string]any{
+			"id":              result.ID,
+			"ncf":             result.NCF,
+			"fecha_documento": result.Fecha,
+			"monto":           result.Monto,
+		},
+	})
 }
 
 // HealthResponse represents the health check response structure
