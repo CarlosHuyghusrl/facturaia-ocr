@@ -526,6 +526,15 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 	invoice.Subtotal = parseDecimal(raw.Subtotal)
 	invoice.Descuento = parseDecimal(raw.Descuento)
 
+	// Fallback: si Gemini devolvió descuento=0 pero el raw OCR contiene
+	// una línea de descuento (caso Carnamés: "DESCUENTO 10%: -RD$ 400.00"),
+	// usar detección regex sobre el texto plano.
+	if invoice.Descuento.IsZero() && ocrText != "" {
+		if detected := DetectDiscount(ocrText); !detected.IsZero() {
+			invoice.Descuento = detected
+		}
+	}
+
 	// Parse amounts - Montos separados
 	invoice.MontoServicios = parseDecimal(raw.MontoServicios)
 	invoice.MontoBienes = parseDecimal(raw.MontoBienes)
