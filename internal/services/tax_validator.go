@@ -3,6 +3,7 @@ package services
 import (
 	"math"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -47,22 +48,22 @@ type InvoiceInput struct {
 	Descuento      float64 `json:"descuento"`
 
 	// ITBIS
-	ITBISFacturado       float64 `json:"itbis_facturado"`
-	ITBISTasa            float64 `json:"itbis_tasa"`  // 18 (normal) o 16 (zona franca)
-	ITBISExento          float64 `json:"itbis_exento"`
-	ITBISRetenido        float64 `json:"itbis_retenido"`
+	ITBISFacturado        float64 `json:"itbis_facturado"`
+	ITBISTasa             float64 `json:"itbis_tasa"` // 18 (normal) o 16 (zona franca)
+	ITBISExento           float64 `json:"itbis_exento"`
+	ITBISRetenido         float64 `json:"itbis_retenido"`
 	ITBISProporcionalidad float64 `json:"itbis_proporcionalidad"`
-	ITBISCosto           float64 `json:"itbis_costo"`
+	ITBISCosto            float64 `json:"itbis_costo"`
 
 	// ISC
-	ISCMonto    float64 `json:"isc_monto"`
+	ISCMonto     float64 `json:"isc_monto"`
 	ISCCategoria string  `json:"isc_categoria"`
 
 	// Other taxes
-	CDTMonto        float64 `json:"cdt_monto"`
-	Cargo911        float64 `json:"cargo_911"`
-	PropinaLegal    float64 `json:"propina_legal"`
-	OtrosImpuestos  float64 `json:"otros_impuestos"`
+	CDTMonto          float64 `json:"cdt_monto"`
+	Cargo911          float64 `json:"cargo_911"`
+	PropinaLegal      float64 `json:"propina_legal"`
+	OtrosImpuestos    float64 `json:"otros_impuestos"`
 	MontoNoFacturable float64 `json:"monto_no_facturable"`
 
 	// ISR retention
@@ -80,11 +81,34 @@ type InvoiceInput struct {
 	ITBISRetenidoPorcentaje int `json:"itbis_retenido_porcentaje"` // 30 o 100
 
 	// NCF
-	NCF           string `json:"ncf"`
-	NCFVencimiento string `json:"ncf_vencimiento"` // YYYY-MM-DD
+	NCF            string `json:"ncf"`
+	NCFVencimiento string `json:"ncf_vencimiento"` // YYYY-MM-DD or ISO RFC3339
 
 	// Payment
 	FechaPago string `json:"fecha_pago"` // YYYY-MM-DD
+
+	// Emisor identity — used for W17.5 RNC validation
+	NombreEmisor string `json:"nombre_emisor"`
+	RNCEmisor    string `json:"rnc_emisor"`
+
+	// W17.1 — IA fiscal skill fields returned by Gemini OCR
+	// Gemini identifies ITBIS category + sector to avoid false validation errors.
+	// "exento" = proveedor servicio básico (electricidad/combustible/agua) — skip strict ITBIS check
+	// "mixto"  = supermercado con productos a tasas mixtas 18%+16%+0% — skip strict ITBIS check
+	// "general" or "" = single-rate 18% — apply normal validation
+	CategoriaITBIS string `json:"categoria_itbis"` // general|reducido|exento|mixto
+
+	// sector_proveedor identified by IA: electricidad|combustible|agua|salud|educacion|comercio|otros
+	// Sectors other than "comercio" are typically ITBIS-exempt by Dominican law.
+	SectorProveedor string `json:"sector_proveedor"`
+
+	// requiere_correccion is set by IA to true ONLY when it detects a real error.
+	// false = IA considers invoice valid (possibly with warnings). Validator respects this.
+	RequiereCorreccion bool `json:"requiere_correccion"`
+
+	// warnings_ia contains informational messages from the IA fiscal analysis.
+	// These are surfaced as orange warnings to the user, never blocking errors.
+	WarningsIA []string `json:"warnings_ia"`
 }
 
 // TaxValidator validates Dominican invoice tax fields
@@ -106,6 +130,17 @@ func (v *TaxValidator) Validate(input *InvoiceInput) *ValidationResult {
 		Warnings:    []ValidationWarning{},
 	}
 
+	// Propagate IA warnings as orange (non-blocking) warnings first
+	for _, w := range input.WarningsIA {
+		if w != "" {
+			result.Warnings = append(result.Warnings, ValidationWarning{
+				Field:   "warnings_ia",
+				Code:    "ia_fiscal_warning",
+				Message: w,
+			})
+		}
+	}
+
 	// Calculate computed values
 	baseGravada := input.MontoServicios + input.MontoBienes - input.Descuento - input.ITBISExento
 	if baseGravada < 0 {
@@ -119,6 +154,7 @@ func (v *TaxValidator) Validate(input *InvoiceInput) *ValidationResult {
 		itbisTasa = 0.16
 	}
 	itbisEsperado := baseGravada * itbisTasa
+
 	totalEsperado := montoFacturado + input.ITBISFacturado + input.ISCMonto +
 		input.CDTMonto + input.Cargo911 + input.PropinaLegal + input.OtrosImpuestos
 
@@ -165,6 +201,9 @@ func (v *TaxValidator) Validate(input *InvoiceInput) *ValidationResult {
 	// 12. Validate ITBIS Retenido porcentaje
 	v.validateITBISRetenidoPorcentaje(input, result)
 
+	// 13. Validate RNC emisor length (W17.5)
+	v.validateRNCLength(input, result)
+
 	// Set final status
 	result.Valid = len(result.Errors) == 0
 	result.NeedsReview = len(result.Warnings) > 0
@@ -172,9 +211,41 @@ func (v *TaxValidator) Validate(input *InvoiceInput) *ValidationResult {
 	return result
 }
 
-// validateITBIS checks ITBIS matches 18% of base gravada
+// validateITBIS checks ITBIS matches expected rate of base gravada.
+//
+// W17.1 (IA-driven): If Gemini fiscal skill identified the invoice as exento or mixto,
+// skip strict validation — IA already made the call. Only emit orange warning when
+// ITBIS=0 and sector is unknown (sector_proveedor == "" or "comercio").
 func (v *TaxValidator) validateITBIS(input *InvoiceInput, result *ValidationResult, baseGravada, itbisEsperado float64) {
 	if baseGravada <= 0 {
+		return
+	}
+
+	// W17.1 — IA fiscal skill: respect IA categorization
+	// "exento" = proveedor servicio básico — skip strict ITBIS, trust IA
+	// "mixto"  = supermercado multi-tasa — skip strict ITBIS, trust IA
+	categoriaLower := strings.ToLower(input.CategoriaITBIS)
+	if categoriaLower == "exento" || categoriaLower == "mixto" {
+		return
+	}
+
+	// If IA identified a non-comercio sector and did NOT flag requiere_correccion, trust IA
+	sectorLower := strings.ToLower(input.SectorProveedor)
+	if sectorLower != "" && sectorLower != "comercio" && !input.RequiereCorreccion {
+		return
+	}
+
+	// W17.1 — If ITBIS=0 but IA did not identify sector → orange warning (NOT error)
+	// This covers unknown providers that may be exempt (user should verify manually)
+	if input.ITBISFacturado == 0 {
+		montoFacturado := input.MontoServicios + input.MontoBienes - input.Descuento
+		if montoFacturado > 100 {
+			result.Warnings = append(result.Warnings, ValidationWarning{
+				Field:   "itbis_facturado",
+				Code:    "verificar_si_exento",
+				Message: "ITBIS=0 detectado — verificar si proveedor es servicio básico exento",
+			})
+		}
 		return
 	}
 
@@ -326,9 +397,9 @@ func (v *TaxValidator) validateNCF(input *InvoiceInput, result *ValidationResult
 		})
 	}
 
-	// Check expiration
+	// Check expiration — W17.6: sanitize ISO RFC3339 to YYYY-MM-DD before parse
 	if input.NCFVencimiento != "" {
-		vencimiento, err := time.Parse("2006-01-02", input.NCFVencimiento)
+		vencimiento, err := time.Parse("2006-01-02", sanitizeDate(input.NCFVencimiento))
 		if err == nil && time.Now().After(vencimiento) {
 			result.Errors = append(result.Errors, ValidationError{
 				Field:   "ncf_vencimiento",
@@ -517,7 +588,56 @@ func (v *TaxValidator) validateITBISRetenidoPorcentaje(input *InvoiceInput, resu
 	}
 }
 
+// validateRNCLength checks RNC emisor digit count.
+// W17.5: 8 digits = likely OCR cut a digit → yellow warning (NOT error).
+// Valid: 9 digits (RNC empresa) or 11 digits (cédula).
+// Invalid: < 8 or > 11 (except 9, 11) → error.
+func (v *TaxValidator) validateRNCLength(input *InvoiceInput, result *ValidationResult) {
+	rnc := input.RNCEmisor
+	if rnc == "" {
+		return
+	}
+
+	// Count digits only (strip non-digit chars if any)
+	digits := 0
+	for _, r := range rnc {
+		if r >= '0' && r <= '9' {
+			digits++
+		}
+	}
+
+	switch {
+	case digits == 9 || digits == 11:
+		// Valid — no action
+	case digits == 8:
+		// Likely OCR cut one digit — yellow warning, not error
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "rnc_emisor",
+			Code:    "rnc_8_digitos_posible_corte",
+			Message: "RNC con 8 dígitos detectado — verificar manualmente (DGII usa 9 u 11)",
+		})
+	default:
+		// Clearly invalid length
+		result.Errors = append(result.Errors, ValidationError{
+			Field:   "rnc_emisor",
+			Code:    "rnc_longitud_invalida",
+			Message: "RNC debe tener 9 dígitos (empresa) u 11 dígitos (cédula)",
+		})
+	}
+}
+
 // round2 rounds to 2 decimal places
 func round2(f float64) float64 {
 	return math.Round(f*100) / 100
+}
+
+// sanitizeDate strips ISO 8601 timezone/time suffix, returning only YYYY-MM-DD.
+// W17.6: handles inputs like "2026-01-31T00:00:00Z", "2026-01-31T00:00:00-04:00", "2026-01-31".
+var dateOnlyRegex = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})`)
+
+func sanitizeDate(s string) string {
+	if m := dateOnlyRegex.FindString(s); m != "" {
+		return m
+	}
+	return strings.TrimSpace(s)
 }
