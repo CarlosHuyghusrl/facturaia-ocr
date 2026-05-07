@@ -493,6 +493,14 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		ITBISRetenidoPorcentaje: invoice.ITBISRetenidoPorcentaje,
 		FechaPago:               fechaPagoStr,
 		NCFVencimiento:          ncfVencimientoStr,
+		// Emisor identity — for RNC length validation (W17.5)
+		NombreEmisor: invoice.NombreEmisor,
+		RNCEmisor:    invoice.RNCEmisor,
+		// W17.1 — IA fiscal skill fields: let IA override strict ITBIS validation
+		CategoriaITBIS:     invoice.CategoriaITBIS,
+		SectorProveedor:    invoice.SectorProveedor,
+		RequiereCorreccion: invoice.RequiereCorreccion,
+		WarningsIA:         invoice.WarningsIA,
 	}
 
 	validator := services.NewTaxValidator()

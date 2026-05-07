@@ -67,6 +67,30 @@ func (e *Extractor) buildPromptVision() string {
 
 	prompt := fmt.Sprintf(`Eres experto en facturas fiscales de Republica Dominicana. Lee la imagen y extrae datos DGII.
 
+## CONTEXTO FISCAL RD — ITBIS (aplica SIEMPRE)
+
+### ITBIS — 3 categorias de tasa
+- 18%% GENERAL: mayoria de bienes y servicios
+- 16%% REDUCIDO (Norma 11-92): yogur, cafe, grasas/aceites, azucares, chocolate, embutidos
+- 0%% EXENTO POR LEY: combustibles (gasolina/diesel/GLP/gasoil), electricidad, agua potable, medicamentos, pan/leche, libros, educacion, salud, transporte publico
+
+### Sectores ITBIS exento por ley (sector_proveedor)
+- electricidad: companias energia (Edenorte/Edesur/Edeeste/Puerto Plata Electr/cualquier distribuidora)
+- combustible: estaciones servicio (Shell/Texaco/Esso/Sunix/Refidomsa/cualquier bomba gasolina)
+- agua: CAASD/INAPA/acueductos municipales
+- salud: clinicas/hospitales/farmacias (solo medicamentos)
+- educacion: colegios/universidades/librerias escolares
+
+Cuando proveedor pertenece a sector exento Y itbis=0 → categoriaItbis="exento", requiereCorreccion=false.
+
+### Descuento proveedor — practica habitual
+Comerciales (mariscos/carnes/frutas/ferreterias) aplican "DESCUENTO/DESC/DTO/DSC".
+Base Gravada = (subtotal - descuento). ITBIS = 18%% × Base Gravada.
+
+### Factura mixta — supermercados (Jumbo/La Sirena/PriceSmart/Bravo/Nacional)
+Mezcla productos al 18%% + 16%% + 0%%. ITBIS total = suma buckets × tasa. Tolerancia ±1 RD$.
+Cuando detectes mezcla de tasas → categoriaItbis="mixto", requiereCorreccion=false.
+
 ## EMISOR vs RECEPTOR (CRITICO)
 - EMISOR = quien VENDE: aparece ARRIBA (encabezado, logo, nombre tienda, RNC, URL web)
 - RECEPTOR = quien COMPRA: aparece ABAJO despues de totales ("RNC/Cedula:", "Cliente:", nombre empresa cliente)
@@ -87,8 +111,12 @@ func (e *Extractor) buildPromptVision() string {
 - Propina: 10%% en restaurantes/hoteles
 
 ## JSON A DEVOLVER (SOLO JSON, sin markdown)
-{"ncf":"","tipoNcf":"","ncfModifica":null,"rncEmisor":"","nombreEmisor":"","tipoIdEmisor":"1","rncReceptor":"","nombreReceptor":"","tipoIdReceptor":"1","fechaFactura":"YYYY-MM-DD","horaFactura":null,"fechaVencimiento":null,"fechaPago":null,"subtotal":0,"descuento":0,"montoServicios":0,"montoBienes":0,"itbis":0,"itbisTasa":18,"itbisRetenido":0,"itbisRetenidoPorcentaje":0,"itbisExento":0,"isr":0,"retencionIsrTipo":0,"isc":0,"iscCategoria":null,"cdtMonto":0,"cargo911":0,"propina":0,"otrosImpuestos":0,"montoNoFacturable":0,"total":0,"formaPago":"01","tipoBienServicio":"01","items":[]}
+{"ncf":"","tipoNcf":"","ncfModifica":null,"rncEmisor":"","nombreEmisor":"","tipoIdEmisor":"1","rncReceptor":"","nombreReceptor":"","tipoIdReceptor":"1","fechaFactura":"YYYY-MM-DD","horaFactura":null,"fechaVencimiento":null,"fechaPago":null,"subtotal":0,"descuento":0,"montoServicios":0,"montoBienes":0,"itbis":0,"itbisTasa":18,"itbisRetenido":0,"itbisRetenidoPorcentaje":0,"itbisExento":0,"isr":0,"retencionIsrTipo":0,"isc":0,"iscCategoria":null,"cdtMonto":0,"cargo911":0,"propina":0,"otrosImpuestos":0,"montoNoFacturable":0,"total":0,"formaPago":"01","tipoBienServicio":"01","categoriaItbis":"general","sectorProveedor":"comercio","requiereCorreccion":false,"warningsIa":[],"items":[]}
 
+categoriaItbis: general|reducido|exento|mixto (usa exento si proveedor sector basico y ITBIS=0; mixto si supermercado con tasas mixtas)
+sectorProveedor: electricidad|combustible|agua|salud|educacion|comercio|otros
+requiereCorreccion: true SOLO si detectas error real (no por sectores exentos ni tasas mixtas)
+warningsIa: lista de mensajes informativos naranjas (ej. ["Factura de combustible — ITBIS exento por ley"])
 formaPago: 01=Efectivo,02=Cheque/Transfer,03=Tarjeta,04=Credito,05=Permuta,06=Nota Credito,07=Mixto
 tipoBienServicio: 01=Personal,02=Servicios,03=Arrendamiento,04=Activos fijos,05=Representacion,06=Deducciones,07=Financieros,08=Extraordinarios,09=Costo venta,10=Activos,11=Seguros,12=Viajes,13=Otros
 
@@ -101,6 +129,29 @@ func (e *Extractor) buildPromptDGII(ocrText string) string {
 	currentYear := time.Now().Year()
 
 	prompt := fmt.Sprintf(`Eres un EXPERTO en facturas fiscales de Republica Dominicana. Tu trabajo es extraer TODOS los datos fiscales de este texto OCR para el sistema DGII.
+
+## CONTEXTO FISCAL RD — SKILL DGII (aplica SIEMPRE antes de extraer)
+
+### ITBIS — 3 categorias de tasa
+- 18%% GENERAL: mayoria de bienes y servicios gravados
+- 16%% REDUCIDO (Norma 11-92): yogur, cafe, grasas/aceites, azucares, chocolate, embutidos
+- 0%% EXENTO POR LEY: combustibles (gasolina/diesel/GLP/gasoil), electricidad, agua potable, medicamentos, pan/leche, libros, educacion, salud, transporte publico
+
+### Sectores ITBIS exento por ley → sectorProveedor
+- electricidad: Edenorte/Edesur/Edeeste/Puerto Plata Electr/cualquier distribuidora electrica
+- combustible: Shell/Texaco/Esso/Sunix/Refidomsa/cualquier bomba gasolina/estacion de servicio
+- agua: CAASD/INAPA/acueductos municipales
+- salud: clinicas/hospitales/farmacias (medicamentos)
+- educacion: colegios/universidades/librerias escolares
+
+Cuando proveedor pertenece a sector exento Y itbis=0 → categoriaItbis="exento", requiereCorreccion=false, warningsIa=["Servicio basico (electricidad/combustible/agua) — ITBIS exento por ley"].
+
+### Descuento proveedor — practica habitual
+Comerciales (mariscos/carnes/frutas/ferreterias) aplican "DESCUENTO/DESC/DTO/DSC".
+Base Gravada = (subtotal - descuento). ITBIS = 18%% × Base Gravada. NO marcar error.
+
+### Factura mixta (supermercados: Jumbo/La Sirena/PriceSmart/Bravo/Nacional)
+Detectar si hay mezcla de tasas 18%%+16%%+0%%. Si detectas → categoriaItbis="mixto", requiereCorreccion=false, warningsIa=["Factura mixta — productos a diferentes tasas ITBIS"].
 
 ## PASO 1 - IDENTIFICA EL TIPO DE DOCUMENTO:
 - TICKET DE TIENDA: papel termico (supermercados, tiendas, farmacias)
@@ -175,6 +226,10 @@ Devuelve SOLO JSON valido (sin markdown, sin comentarios):
   "total": numero final a pagar (usa 0 si no aparece, NUNCA null),
   "formaPago": "01-07 segun codigo",
   "tipoBienServicio": "01-13 segun codigo",
+  "categoriaItbis": "general|reducido|exento|mixto (exento si proveedor sector basico ITBIS=0; mixto si supermercado tasas mixtas; reducido si solo 16%%; general por defecto)",
+  "sectorProveedor": "electricidad|combustible|agua|salud|educacion|comercio|otros",
+  "requiereCorreccion": false (true SOLO si error real detectado; false para sectores exentos y tasas mixtas),
+  "warningsIa": ["mensajes informativos naranjas para el usuario, ej: 'Combustible — ITBIS exento por ley'"],
   "items": [{"codigo": "001", "descripcion": "...", "cantidad": 1, "precioUnit": 100, "descuento": 0, "itbis": 18, "importe": 118}]
 }
 
@@ -314,7 +369,12 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 		Total            interface{} `json:"total"`
 		FormaPago        string      `json:"formaPago"`
 		TipoBienServicio string      `json:"tipoBienServicio"`
-		Items            []struct {
+		// W17.1 — IA fiscal skill fields
+		CategoriaITBIS     string   `json:"categoriaItbis"`
+		SectorProveedor    string   `json:"sectorProveedor"`
+		RequiereCorreccion bool     `json:"requiereCorreccion"`
+		WarningsIA         []string `json:"warningsIa"`
+		Items              []struct {
 			Codigo         string      `json:"codigo"`
 			Descripcion    string      `json:"descripcion"`
 			Cantidad       interface{} `json:"cantidad"`
@@ -470,6 +530,15 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 			IsTaxed:  !parseDecimal(item.ITBIS).IsZero(),
 			Quantity: cantidadInt,
 		}
+	}
+
+	// W17.1 — IA fiscal skill fields
+	invoice.CategoriaITBIS = raw.CategoriaITBIS
+	invoice.SectorProveedor = raw.SectorProveedor
+	invoice.RequiereCorreccion = raw.RequiereCorreccion
+	invoice.WarningsIA = raw.WarningsIA
+	if invoice.WarningsIA == nil {
+		invoice.WarningsIA = []string{}
 	}
 
 	// Auto-detect tipo ID if not set

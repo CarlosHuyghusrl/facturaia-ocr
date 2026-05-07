@@ -79,6 +79,13 @@ type Invoice struct {
 	// Raw data
 	RawText string `json:"rawText,omitempty"` // Complete OCR text
 
+	// W17.1 — Fiscal skill fields returned by Gemini OCR
+	// Validator uses these to avoid false errors on exempt providers and mixed-rate invoices.
+	CategoriaITBIS     string   `json:"categoriaItbis,omitempty"`     // general|reducido|exento|mixto
+	SectorProveedor    string   `json:"sectorProveedor,omitempty"`    // electricidad|combustible|agua|salud|educacion|comercio|otros
+	RequiereCorreccion bool     `json:"requiereCorreccion"`            // true = IA detected real error
+	WarningsIA         []string `json:"warningsIa,omitempty"`          // informational orange messages
+
 	// Metadata
 	Confidence  float64   `json:"confidence"`   // Overall confidence score (0-1)
 	ProcessedAt time.Time `json:"processedAt"`  // When it was processed
