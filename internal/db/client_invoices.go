@@ -580,8 +580,10 @@ type Formato606Invoice struct {
 	Proveedor             string
 }
 
-// GetFormato606Invoices queries facturas_clientes for 606-eligible invoices
-func GetFormato606Invoices(ctx context.Context, rncReceptor, periodo string) ([]Formato606Invoice, error) {
+// GetFormato606Invoices queries facturas_clientes for 606-eligible invoices.
+// clienteID must be the authenticated user's cliente_id from JWT claims — enforces
+// tenant isolation and prevents cross-tenant data leaks (W2 P0 security fix).
+func GetFormato606Invoices(ctx context.Context, rncReceptor, periodo, clienteID string) ([]Formato606Invoice, error) {
 	if Pool == nil {
 		return nil, ErrNoDatabase
 	}
@@ -602,10 +604,11 @@ func GetFormato606Invoices(ctx context.Context, rncReceptor, periodo string) ([]
 		FROM facturas_clientes
 		WHERE REPLACE(COALESCE(receptor_rnc,''),'-','') = $1
 		  AND to_char(fecha_documento, 'YYYYMM') = $2
+		  AND cliente_id = $3::uuid
 		  AND (estado IS NULL OR estado != 'eliminada')
 		  AND aplica_606 = true
 		ORDER BY fecha_documento, id
-	`, rncReceptor, periodo)
+	`, rncReceptor, periodo, clienteID)
 	if err != nil {
 		return nil, err
 	}

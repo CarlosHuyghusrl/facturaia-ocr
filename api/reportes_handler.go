@@ -243,7 +243,7 @@ func (h *Handler) GetFormato606(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	invoices, err := db.GetFormato606Invoices(ctx, rncReceptor, periodo)
+	invoices, err := db.GetFormato606Invoices(ctx, rncReceptor, periodo, claims.UserID) // W2 P0 FIX cross-tenant
 	if err != nil {
 		log.Printf("GetFormato606: DB error: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "error consultando facturas")
@@ -319,7 +319,7 @@ func (h *Handler) GetFormato606Preview(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
 
-	_, err := auth.GetClaimsFromContext(ctx)
+	claims, err := auth.GetClaimsFromContext(ctx) // W2 P0 FIX: capture claims for tenant filter
 	if err != nil {
 		h.sendError(w, http.StatusUnauthorized, "unauthorized")
 		return
@@ -338,7 +338,7 @@ func (h *Handler) GetFormato606Preview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	invoices, err := db.GetFormato606Invoices(ctx, rncReceptor, periodo)
+	invoices, err := db.GetFormato606Invoices(ctx, rncReceptor, periodo, claims.UserID) // W2 P0 FIX cross-tenant
 	if err != nil {
 		log.Printf("GetFormato606Preview: DB error: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "error consultando facturas")
@@ -398,7 +398,7 @@ func (h *Handler) ValidateFormato606(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
 
-	_, err := auth.GetClaimsFromContext(ctx)
+	claims, err := auth.GetClaimsFromContext(ctx) // W2 P0 FIX: capture claims for tenant filter
 	if err != nil {
 		h.sendError(w, http.StatusUnauthorized, "unauthorized")
 		return
@@ -417,7 +417,7 @@ func (h *Handler) ValidateFormato606(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	invoices, err := db.GetFormato606Invoices(ctx, rncReceptor, periodo)
+	invoices, err := db.GetFormato606Invoices(ctx, rncReceptor, periodo, claims.UserID) // W2 P0 FIX cross-tenant
 	if err != nil {
 		log.Printf("ValidateFormato606: DB error: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "error consultando facturas")

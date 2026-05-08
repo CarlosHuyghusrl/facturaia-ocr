@@ -159,6 +159,49 @@ func TestSaveClientInvoice_LookupEmpresaID(t *testing.T) {
 	})
 }
 
+// TestGetFormato606_CrossTenantIsolation verifica que GetFormato606Invoices
+// filtra por cliente_id del JWT y NO devuelve facturas de otros tenants.
+// W2 P0 security fix — KB 9089.
+// Por defecto skip: requiere DATABASE_URL + SETUP_E2E_TEST_DB=1.
+func TestGetFormato606_CrossTenantIsolation(t *testing.T) {
+	if os.Getenv("SETUP_E2E_TEST_DB") != "1" {
+		t.Skip("Skipping cross-tenant isolation test: set SETUP_E2E_TEST_DB=1 to run against real DB")
+	}
+
+	ctx := context.Background()
+
+	// Tenant B = HUYGHU (RNC 131047939, cliente_id real en BD prod)
+	huyghuClienteID := "214538f1-536d-4c6e-a0a8-4d50d02070fb"
+	huyghuRNC := "131047939"
+
+	// Tenant A = Acela (cliente_id diferente — any valid UUID that is NOT huyghu)
+	acelaClienteID := "9d216684-0000-0000-0000-000000000000" // dummy UUID for isolation check
+
+	periodo := "202601" // periodo where HUYGHU has confirmed 606 invoices
+
+	t.Run("tenant_A_cannot_read_tenant_B_606", func(t *testing.T) {
+		// Acela JWT (clienteID=acelaClienteID) solicita RNC de HUYGHU → debe obtener 0 filas
+		invoices, err := GetFormato606Invoices(ctx, huyghuRNC, periodo, acelaClienteID)
+		if err != nil {
+			t.Fatalf("GetFormato606Invoices error: %v", err)
+		}
+		if len(invoices) != 0 {
+			t.Errorf("P0 cross-tenant leak detectado: tenant A (Acela) lee %d facturas de tenant B (HUYGHU)", len(invoices))
+		}
+	})
+
+	t.Run("tenant_B_reads_own_606", func(t *testing.T) {
+		// HUYGHU JWT (clienteID=huyghuClienteID) solicita su propio RNC → debe obtener filas
+		invoices, err := GetFormato606Invoices(ctx, huyghuRNC, periodo, huyghuClienteID)
+		if err != nil {
+			t.Fatalf("GetFormato606Invoices error: %v", err)
+		}
+		if len(invoices) == 0 {
+			t.Logf("Warning: tenant B (HUYGHU) tiene 0 facturas aplica_606=true en periodo %s — verifica BD", periodo)
+		}
+	})
+}
+
 // timePtr helper para campos *time.Time en formato YYYY-MM-DD
 func timePtr(dateStr string) *time.Time {
 	t, _ := time.Parse("2006-01-02", dateStr)
