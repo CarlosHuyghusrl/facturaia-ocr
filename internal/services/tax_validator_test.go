@@ -241,6 +241,109 @@ func Test_NCFVencimiento_ISO_In_Validate(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// W18 — NCF sanitize (strip whitespace/dashes/uppercase) antes regex check
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Test_NCF_Sanitize_With_Dashes: OCR retorna "E32-0036718526" con guiones → no error
+func Test_NCF_Sanitize_With_Dashes(t *testing.T) {
+	v := NewTaxValidator()
+	input := &InvoiceInput{
+		MontoServicios: 1000.0,
+		ITBISFacturado: 180.0,
+		TotalFactura:   1180.0,
+		NCF:            "E32-0036718526", // guiones que OCR puede añadir
+	}
+
+	result := v.Validate(input)
+
+	for _, e := range result.Errors {
+		if e.Code == "ncf_invalid_format" {
+			t.Errorf("NCF con guiones 'E32-0036718526' debe pasar sanitize → no error, got: %+v", e)
+		}
+	}
+}
+
+// Test_NCF_Sanitize_With_Spaces: OCR retorna "E32 0036718526" con espacios → no error
+func Test_NCF_Sanitize_With_Spaces(t *testing.T) {
+	v := NewTaxValidator()
+	input := &InvoiceInput{
+		MontoServicios: 1000.0,
+		ITBISFacturado: 180.0,
+		TotalFactura:   1180.0,
+		NCF:            "E32 0036718526", // espacios que OCR puede añadir
+	}
+
+	result := v.Validate(input)
+
+	for _, e := range result.Errors {
+		if e.Code == "ncf_invalid_format" {
+			t.Errorf("NCF con espacios 'E32 0036718526' debe pasar sanitize → no error, got: %+v", e)
+		}
+	}
+}
+
+// Test_NCF_Sanitize_Lowercase: OCR retorna "e320036718526" en minúscula → no error
+func Test_NCF_Sanitize_Lowercase(t *testing.T) {
+	v := NewTaxValidator()
+	input := &InvoiceInput{
+		MontoServicios: 1000.0,
+		ITBISFacturado: 180.0,
+		TotalFactura:   1180.0,
+		NCF:            "e320036718526", // minúscula — OCR no siempre capitaliza
+	}
+
+	result := v.Validate(input)
+
+	for _, e := range result.Errors {
+		if e.Code == "ncf_invalid_format" {
+			t.Errorf("NCF lowercase 'e320036718526' debe pasar sanitize → no error, got: %+v", e)
+		}
+	}
+}
+
+// Test_NCF_Clean_Still_Valid: NCF limpio "E320036718526" sigue siendo válido (backward compat)
+func Test_NCF_Clean_Still_Valid(t *testing.T) {
+	v := NewTaxValidator()
+	input := &InvoiceInput{
+		MontoServicios: 1000.0,
+		ITBISFacturado: 180.0,
+		TotalFactura:   1180.0,
+		NCF:            "E320036718526", // NCF limpio — debe seguir válido
+	}
+
+	result := v.Validate(input)
+
+	for _, e := range result.Errors {
+		if e.Code == "ncf_invalid_format" {
+			t.Errorf("NCF limpio 'E320036718526' debe ser válido (backward compat), got: %+v", e)
+		}
+	}
+}
+
+// Test_NCF_Invalid_Format_Still_Errors: NCF "ABC123" sigue siendo inválido
+func Test_NCF_Invalid_Format_Still_Errors(t *testing.T) {
+	v := NewTaxValidator()
+	input := &InvoiceInput{
+		MontoServicios: 1000.0,
+		ITBISFacturado: 180.0,
+		TotalFactura:   1180.0,
+		NCF:            "ABC123", // formato claramente inválido
+	}
+
+	result := v.Validate(input)
+
+	foundError := false
+	for _, e := range result.Errors {
+		if e.Code == "ncf_invalid_format" {
+			foundError = true
+		}
+	}
+	if !foundError {
+		t.Errorf("NCF inválido 'ABC123' debe producir error ncf_invalid_format, got errors: %+v", result.Errors)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Backward compat — normal single-rate invoice still works
 // ─────────────────────────────────────────────────────────────────────────────
 
