@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -198,6 +199,94 @@ func TestGetFormato606_CrossTenantIsolation(t *testing.T) {
 		}
 		if len(invoices) == 0 {
 			t.Logf("Warning: tenant B (HUYGHU) tiene 0 facturas aplica_606=true en periodo %s — verifica BD", periodo)
+		}
+	})
+}
+
+// TestGetFormato608_CrossTenantIsolation verifica que GetFormato608Invoices
+// filtra por cliente_id del JWT y NO devuelve facturas de otros tenants.
+// W3.5 P1 security fix — KBs 9114+9115.
+// Por defecto skip: requiere DATABASE_URL + SETUP_E2E_TEST_DB=1.
+func TestGetFormato608_CrossTenantIsolation(t *testing.T) {
+	if os.Getenv("SETUP_E2E_TEST_DB") != "1" {
+		t.Skip("Skipping cross-tenant isolation test: set SETUP_E2E_TEST_DB=1 to run against real DB")
+	}
+
+	ctx := context.Background()
+
+	// Tenant B = HUYGHU (RNC 131047939, cliente_id real en BD prod)
+	huyghuClienteID := "214538f1-536d-4c6e-a0a8-4d50d02070fb"
+	huyghuRNC := "131047939"
+
+	// Tenant A = another client (dummy UUID — NOT huyghu)
+	otherClienteID := "9d216684-0000-0000-0000-000000000000"
+
+	periodo := "202601"
+
+	t.Run("tenant_A_cannot_read_tenant_B_608", func(t *testing.T) {
+		// Other tenant JWT solicita RNC de HUYGHU → debe obtener 0 filas
+		invoices, err := GetFormato608Invoices(ctx, huyghuRNC, periodo, otherClienteID)
+		if err != nil {
+			t.Fatalf("GetFormato608Invoices error: %v", err)
+		}
+		if len(invoices) != 0 {
+			t.Errorf("P1 cross-tenant leak detectado: tenant A lee %d facturas 608 de tenant B (HUYGHU)", len(invoices))
+		}
+	})
+
+	t.Run("tenant_B_reads_own_608", func(t *testing.T) {
+		// HUYGHU JWT solicita su propio RNC → debe obtener filas (o 0 si no hay anuladas)
+		invoices, err := GetFormato608Invoices(ctx, huyghuRNC, periodo, huyghuClienteID)
+		if err != nil {
+			t.Fatalf("GetFormato608Invoices error: %v", err)
+		}
+		t.Logf("tenant B (HUYGHU) tiene %d facturas aplica_608=true en periodo %s", len(invoices), periodo)
+	})
+}
+
+// TestUpdateEnvio606_OwnershipCheck verifica que UpdateEnvio606Referencia
+// rechaza actualizaciones de envíos que no pertenecen al cliente autenticado.
+// W3.5 P1 security fix — KBs 9114+9115.
+// Por defecto skip: requiere DATABASE_URL + SETUP_E2E_TEST_DB=1.
+func TestUpdateEnvio606_OwnershipCheck(t *testing.T) {
+	if os.Getenv("SETUP_E2E_TEST_DB") != "1" {
+		t.Skip("Skipping ownership check test: set SETUP_E2E_TEST_DB=1 to run against real DB")
+	}
+
+	ctx := context.Background()
+
+	huyghuClienteID := "214538f1-536d-4c6e-a0a8-4d50d02070fb"
+	otherClienteID := "9d216684-0000-0000-0000-000000000001"
+
+	// Insert a test envio belonging to HUYGHU
+	var envioID string
+	err := Pool.QueryRow(ctx, `
+		INSERT INTO envios_606 (cliente_id, rnc, periodo, estado)
+		VALUES ($1::uuid, '131047939', '202601', 'generado')
+		RETURNING id
+	`, huyghuClienteID).Scan(&envioID)
+	if err != nil {
+		t.Fatalf("setup: failed to insert test envio_606: %v", err)
+	}
+	defer func() {
+		_, _ = Pool.Exec(ctx, `DELETE FROM envios_606 WHERE id = $1::uuid`, envioID)
+	}()
+
+	t.Run("owner_can_update", func(t *testing.T) {
+		// HUYGHU updating its own envio → should succeed (RowsAffected=1)
+		err := UpdateEnvio606Referencia(ctx, envioID, "REF-TEST-001", "enviado", huyghuClienteID)
+		if err != nil {
+			t.Errorf("owner update failed unexpectedly: %v", err)
+		}
+	})
+
+	t.Run("other_tenant_cannot_update", func(t *testing.T) {
+		// Other tenant trying to update HUYGHU's envio → must return error "not owned"
+		err := UpdateEnvio606Referencia(ctx, envioID, "REF-ATTACK-002", "completado", otherClienteID)
+		if err == nil {
+			t.Error("P1 ownership violation: other tenant updated HUYGHU's envio_606 without error")
+		} else if !strings.Contains(err.Error(), "not owned") {
+			t.Errorf("unexpected error (expected 'not owned'): %v", err)
 		}
 	})
 }

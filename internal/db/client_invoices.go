@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -664,8 +665,10 @@ func InsertEnvio606(ctx context.Context, empresaID, rnc, periodo, archivoTXT, ar
 }
 
 // UpdateEnvio606Referencia updates the DGII reference and status for an envio.
-// estado must be one of: generado, enviado, completado, rechazado, anulado
-func UpdateEnvio606Referencia(ctx context.Context, envioID, referenciaDGII, estado string) error {
+// estado must be one of: generado, enviado, completado, rechazado, anulado.
+// clienteID must be the authenticated user's cliente_id from JWT claims — enforces
+// ownership and prevents cross-tenant mutation (W3.5 P1 security fix).
+func UpdateEnvio606Referencia(ctx context.Context, envioID, referenciaDGII, estado, clienteID string) error {
 	if Pool == nil {
 		return ErrNoDatabase
 	}
@@ -674,14 +677,21 @@ func UpdateEnvio606Referencia(ctx context.Context, envioID, referenciaDGII, esta
 	if !validEstados[estado] {
 		estado = "enviado"
 	}
-	_, err := Pool.Exec(ctx, `
+	res, err := Pool.Exec(ctx, `
 		UPDATE envios_606
 		SET referencia_dgii = $1,
 		    estado = $2,
 		    fecha_envio = NOW()
 		WHERE id = $3::uuid
-	`, referenciaDGII, estado, envioID)
-	return err
+		  AND cliente_id = $4::uuid
+	`, referenciaDGII, estado, envioID, clienteID)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("envio not found or not owned by this cliente")
+	}
+	return nil
 }
 
 // ToggleAplica606 updates the aplica_606 flag on a specific factura
@@ -716,7 +726,9 @@ type Formato608Invoice struct {
 
 // GetFormato608Invoices queries facturas_clientes for 608-eligible (anuladas) invoices.
 // Filtra por empresa (RNC del receptor/empresa contribuyente) y periodo YYYYMM.
-func GetFormato608Invoices(ctx context.Context, rncEmpresa, periodo string) ([]Formato608Invoice, error) {
+// clienteID must be the authenticated user's cliente_id from JWT claims — enforces
+// tenant isolation and prevents cross-tenant data leaks (W3.5 P1 security fix).
+func GetFormato608Invoices(ctx context.Context, rncEmpresa, periodo, clienteID string) ([]Formato608Invoice, error) {
 	if Pool == nil {
 		return nil, ErrNoDatabase
 	}
@@ -734,8 +746,9 @@ func GetFormato608Invoices(ctx context.Context, rncEmpresa, periodo string) ([]F
 		      )
 		  AND aplica_608 = true
 		  AND COALESCE(periodo_608,'') = $2
+		  AND cliente_id = $3::uuid
 		ORDER BY fecha_anulacion NULLS LAST, fecha_documento, id
-	`, rncEmpresa, periodo)
+	`, rncEmpresa, periodo, clienteID)
 	if err != nil {
 		return nil, err
 	}

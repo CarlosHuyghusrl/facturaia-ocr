@@ -535,7 +535,8 @@ func build608Line(inv db.Formato608Invoice) string {
 func (h *Handler) GetFormato608(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	if _, err := auth.GetClaimsFromContext(ctx); err != nil {
+	claims608, err608 := auth.GetClaimsFromContext(ctx)
+	if err608 != nil {
 		h.sendError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -557,7 +558,7 @@ func (h *Handler) GetFormato608(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	invoices, err := db.GetFormato608Invoices(ctx, rnc, periodo)
+	invoices, err := db.GetFormato608Invoices(ctx, rnc, periodo, claims608.UserID)
 	if err != nil {
 		log.Printf("GetFormato608: DB error: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "error consultando facturas anuladas")
@@ -592,8 +593,8 @@ func (h *Handler) UpdateEnvio606Referencia(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
 
-	_, err := auth.GetClaimsFromContext(ctx)
-	if err != nil {
+	claims606ref, err606ref := auth.GetClaimsFromContext(ctx)
+	if err606ref != nil {
 		h.sendError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -620,7 +621,11 @@ func (h *Handler) UpdateEnvio606Referencia(w http.ResponseWriter, r *http.Reques
 		estado = "enviado"
 	}
 
-	if err := db.UpdateEnvio606Referencia(ctx, envioID, body.ReferenciaDGII, estado); err != nil {
+	if err := db.UpdateEnvio606Referencia(ctx, envioID, body.ReferenciaDGII, estado, claims606ref.UserID); err != nil {
+		if strings.Contains(err.Error(), "not owned") {
+			h.sendError(w, http.StatusForbidden, "forbidden: envío no pertenece a este cliente")
+			return
+		}
 		log.Printf("UpdateEnvio606Referencia: DB error: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "error actualizando envío")
 		return
