@@ -358,9 +358,12 @@ func (v *TaxValidator) validateNCF(input *InvoiceInput, result *ValidationResult
 		return
 	}
 
+	// W18: sanitize NCF antes regex check — tolera variaciones OCR (dashes, spaces, lowercase)
+	cleanedNCF := sanitizeNCF(input.NCF)
+
 	// Validate format: B or E followed by 10-12 digits
 	ncfPattern := regexp.MustCompile(`^[BE][0-9]{10,12}$`)
-	if !ncfPattern.MatchString(input.NCF) {
+	if !ncfPattern.MatchString(cleanedNCF) {
 		result.Errors = append(result.Errors, ValidationError{
 			Field:   "ncf",
 			Code:    "ncf_invalid_format",
@@ -372,7 +375,7 @@ func (v *TaxValidator) validateNCF(input *InvoiceInput, result *ValidationResult
 	// Validate NCF type (first 3 chars after B/E)
 	// B01=Crédito Fiscal, B02=Consumidor Final, B04=Nota Crédito,
 	// B14=Régimen Especial, B15=Gubernamental, B16=Exportación
-	tipoNCF := input.NCF[0:3]
+	tipoNCF := cleanedNCF[0:3]
 	validTypes := map[string]string{
 		"B01": "Factura Crédito Fiscal",
 		"B02": "Factura Consumidor Final",
@@ -629,6 +632,23 @@ func (v *TaxValidator) validateRNCLength(input *InvoiceInput, result *Validation
 // round2 rounds to 2 decimal places
 func round2(f float64) float64 {
 	return math.Round(f*100) / 100
+}
+
+// sanitizeNCF normaliza NCF para tolerar variaciones del OCR:
+// - Strip whitespace/tabs/newlines
+// - Strip guiones, underscore, puntos
+// - Uppercase letra inicial (b → B, e → E)
+// Ej: "e32-00367-18526" → "E320036718526"
+//
+//	"B01 0001 2345" → "B010012345"
+//
+// W18: aplica antes del regex check en validateNCF.
+var ncfSanitizeRegex = regexp.MustCompile(`[\s\-_.]`)
+
+func sanitizeNCF(s string) string {
+	cleaned := strings.ToUpper(strings.TrimSpace(s))
+	cleaned = ncfSanitizeRegex.ReplaceAllString(cleaned, "")
+	return cleaned
 }
 
 // sanitizeDate strips ISO 8601 timezone/time suffix, returning only YYYY-MM-DD.
