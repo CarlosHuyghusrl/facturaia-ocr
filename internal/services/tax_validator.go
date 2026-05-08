@@ -354,12 +354,11 @@ func (v *TaxValidator) validateTelecom(input *InvoiceInput, result *ValidationRe
 
 // validateNCF checks NCF format, type and expiration
 func (v *TaxValidator) validateNCF(input *InvoiceInput, result *ValidationResult) {
-	if input.NCF == "" {
+	// W18.6: sanitize first so whitespace-only from OCR is treated the same as empty
+	cleanedNCF := sanitizeNCF(input.NCF)
+	if cleanedNCF == "" {
 		return
 	}
-
-	// W18: sanitize NCF antes regex check — tolera variaciones OCR (dashes, spaces, lowercase)
-	cleanedNCF := sanitizeNCF(input.NCF)
 
 	// Validate format: B or E followed by 10-12 digits
 	ncfPattern := regexp.MustCompile(`^[BE][0-9]{10,12}$`)
