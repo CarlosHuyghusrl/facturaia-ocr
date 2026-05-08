@@ -641,25 +641,26 @@ func GetFormato606Invoices(ctx context.Context, rncReceptor, periodo, clienteID 
 }
 
 // InsertEnvio606 inserts a new entry into envios_606 and returns its id.
-// empresaID may be empty ("") if not known — pass nil in that case.
-func InsertEnvio606(ctx context.Context, empresaID, rnc, periodo, archivoTXT, archivoNombre string, cantRegistros int, totalMonto, totalITBIS, totalAdelantar float64) (string, error) {
+// clienteID is the authenticated user's cliente_id from JWT claims.
+// Pass empty string ("") if not known — column will be NULL.
+func InsertEnvio606(ctx context.Context, clienteID, rnc, periodo, archivoTXT, archivoNombre string, cantRegistros int, totalMonto, totalITBIS, totalAdelantar float64) (string, error) {
 	if Pool == nil {
 		return "", ErrNoDatabase
 	}
 
-	var empresaIDArg interface{}
-	if empresaID != "" {
-		empresaIDArg = empresaID
+	var clienteIDArg interface{}
+	if clienteID != "" {
+		clienteIDArg = clienteID
 	}
 
 	var id string
 	err := Pool.QueryRow(ctx, `
-		INSERT INTO envios_606 (empresa_id, rnc, periodo, archivo_txt, archivo_nombre,
+		INSERT INTO envios_606 (cliente_id, rnc, periodo, archivo_txt, archivo_nombre,
 		                        cantidad_registros, total_monto_facturado, total_itbis_facturado,
 		                        total_itbis_por_adelantar, estado)
 		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, 'generado')
 		RETURNING id
-	`, empresaIDArg, rnc, periodo, archivoTXT, archivoNombre,
+	`, clienteIDArg, rnc, periodo, archivoTXT, archivoNombre,
 		cantRegistros, totalMonto, totalITBIS, totalAdelantar).Scan(&id)
 	return id, err
 }

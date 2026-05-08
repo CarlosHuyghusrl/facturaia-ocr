@@ -291,6 +291,56 @@ func TestUpdateEnvio606_OwnershipCheck(t *testing.T) {
 	})
 }
 
+// TestInsertEnvio606_SchemaCorrect verifica que InsertEnvio606 usa la columna
+// cliente_id correcta del schema (no empresa_id). W4.F2 fix — P2 §11 Wave 3.
+// Por defecto skip: requiere SETUP_E2E_TEST_DB=1 para correr contra BD real.
+func TestInsertEnvio606_SchemaCorrect(t *testing.T) {
+	if os.Getenv("SETUP_E2E_TEST_DB") != "1" {
+		t.Skip("Skipping InsertEnvio606 schema test: set SETUP_E2E_TEST_DB=1 to run against real DB")
+	}
+
+	ctx := context.Background()
+
+	// Cliente HUYGHU real en BD prod local
+	testClienteID := "214538f1-536d-4c6e-a0a8-4d50d02070fb"
+	testRNC := "131047939"
+	testPeriodo := "202605"
+
+	// Cleanup previo por si quedó basura de una corrida anterior
+	_, _ = Pool.Exec(ctx,
+		`DELETE FROM envios_606 WHERE cliente_id = $1::uuid AND periodo = $2 AND rnc = $3`,
+		testClienteID, testPeriodo, testRNC)
+
+	id, err := InsertEnvio606(ctx, testClienteID, testRNC, testPeriodo,
+		"dummy-txt", "DGII_F_606_TEST.TXT",
+		0, 0.0, 0.0, 0.0)
+
+	// Si empresa_id vuelve en el error, el fix no funciono
+	if err != nil {
+		t.Fatalf("InsertEnvio606 error (posible columna empresa_id): %v", err)
+	}
+	if id == "" {
+		t.Fatal("InsertEnvio606 devolvio id vacio")
+	}
+
+	// Cleanup
+	defer func() {
+		_, _ = Pool.Exec(ctx, `DELETE FROM envios_606 WHERE id = $1::uuid`, id)
+	}()
+
+	// Verify fila insertada con cliente_id correcto
+	var dbClienteID string
+	err = Pool.QueryRow(ctx,
+		`SELECT cliente_id::text FROM envios_606 WHERE id = $1::uuid`, id,
+	).Scan(&dbClienteID)
+	if err != nil {
+		t.Fatalf("query post-INSERT failed: %v", err)
+	}
+	if dbClienteID != testClienteID {
+		t.Errorf("cliente_id incorrecto: esperado=%s, got=%s", testClienteID, dbClienteID)
+	}
+}
+
 // timePtr helper para campos *time.Time en formato YYYY-MM-DD
 func timePtr(dateStr string) *time.Time {
 	t, _ := time.Parse("2006-01-02", dateStr)
