@@ -1,0 +1,15 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - forbidigo
+
+linters-settings:
+  forbidigo:
+    forbid:
+      - pattern: 'claims, _ := auth\.GetClaimsFromContext'
+        msg: "Don't discard claims with _ in handlers — security risk (W2 P0 cross-tenant leak Wave 080526)"
+      - pattern: '_, err := auth\.GetClaimsFromContext'
+        msg: "Don't discard claims with _ in handlers that touch BD — must capture for tenant filter"
+    analyze-types: true
