@@ -26,11 +26,11 @@ import (
 	"github.com/facturaIA/invoice-ocr-service/internal/ocr"
 	"github.com/facturaIA/invoice-ocr-service/internal/services"
 	"github.com/facturaIA/invoice-ocr-service/internal/storage"
+	"github.com/facturaIA/invoice-ocr-service/internal/version"
 )
 
 const (
 	MaxUploadSize = 10 * 1024 * 1024 // 10MB
-	Version       = "2.1.0"
 )
 
 // Handler handles HTTP requests for invoice processing
@@ -1071,15 +1071,15 @@ func (h *Handler) createProvider(providerName, modelName string) (ai.Provider, e
 			h.config.AI.OpenAI.BaseURL,
 			model,
 		)
-		// Fallback: openrouter-gemma-27b — free vision model via CLIProxy
+		// Fallback: gemini-1.5-flash — separate quota, valid Vertex AI model (replaces openrouter-gemma-27b which returned 404 NOT_FOUND, KB 9160)
 		fallback := ai.NewOpenAIProvider(
 			h.config.AI.OpenAI.APIKey,
 			h.config.AI.OpenAI.BaseURL,
-			"openrouter-gemma-27b",
+			"gemini-1.5-flash",
 		)
 		return ai.NewFallbackProvider(
 			ai.NamedProvider(model, primary),
-			ai.NamedProvider("openrouter-gemma-27b", fallback),
+			ai.NamedProvider("gemini-1.5-flash", fallback),
 		), nil
 
 	case "gemini":
