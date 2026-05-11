@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -150,6 +151,62 @@ func (s *SupabaseImageStore) Delete(ctx context.Context, archivoURL string) erro
 		return fmt.Errorf("supabase delete HTTP %d: %s", resp.StatusCode, string(body))
 	}
 	return nil
+}
+
+// signedURLResponse is the JSON body returned by Supabase Storage POST /object/sign/<bucket>/<key>.
+type signedURLResponse struct {
+	SignedURL string `json:"signedURL"`
+}
+
+// GetSignedURL generates a time-limited signed URL for direct client access to a Supabase object.
+// archivoURL must have prefix "supabase://<bucket>/<key>".
+// Returns the full signed URL (absolute, prepending apiURL if Supabase returns a relative path).
+func (s *SupabaseImageStore) GetSignedURL(ctx context.Context, archivoURL string, expiresIn time.Duration) (string, error) {
+	if s.apiURL == "" {
+		return "", fmt.Errorf("supabase: SUPABASE_STORAGE_URL not set")
+	}
+	bucket, key, err := parseSupabaseURL(archivoURL)
+	if err != nil {
+		return "", err
+	}
+
+	url := fmt.Sprintf("%s/object/sign/%s/%s", s.apiURL, bucket, key)
+	body, err := json.Marshal(map[string]int{"expiresIn": int(expiresIn.Seconds())})
+	if err != nil {
+		return "", fmt.Errorf("supabase sign: marshal body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("supabase sign: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.serviceKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("supabase sign http: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("supabase sign HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var out signedURLResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("supabase sign: decode response: %w", err)
+	}
+	if out.SignedURL == "" {
+		return "", fmt.Errorf("supabase sign: empty signedURL in response")
+	}
+
+	// Supabase may return a relative URL (starts with "/") — prepend apiURL.
+	if strings.HasPrefix(out.SignedURL, "/") {
+		return s.apiURL + out.SignedURL, nil
+	}
+	return out.SignedURL, nil
 }
 
 // parseSupabaseURL parses "supabase://<bucket>/<key>" into bucket + key.

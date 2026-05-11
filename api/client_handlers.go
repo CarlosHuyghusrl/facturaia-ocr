@@ -433,6 +433,73 @@ func (h *Handler) GetClientInvoiceImage(w http.ResponseWriter, r *http.Request) 
 	io.Copy(w, obj) //nolint:errcheck
 }
 
+// GetClientInvoiceImageSignedURL - GET /api/facturas/{id}/imagen-signed-url
+// Returns a time-limited signed URL so the frontend (or mobile app) can fetch the invoice
+// image directly from Supabase Storage (or MinIO), eliminating backend proxy bandwidth.
+//
+// Response 200: {"url":"...","expires_at":"2026-...","fallback_endpoint":"/api/facturas/<id>/imagen"}
+// Response 200 (fallback only): {"fallback_endpoint":"..."} when signed URL unavailable.
+// Response 401: invalid/missing JWT.
+// Response 404: invoice not found or no image stored.
+func (h *Handler) GetClientInvoiceImageSignedURL(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	claims, err := auth.GetClaimsFromContext(r.Context())
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if db.Pool == nil {
+		http.Error(w, `{"error":"database not available"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	facturaID := mux.Vars(r)["id"]
+
+	// Fetch archivo_url, enforcing ownership via claims.UserID (multi-tenant safe).
+	var archivoURL string
+	err = db.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(archivo_url, '') FROM facturas_clientes WHERE id=$1::uuid AND cliente_id=$2::uuid`,
+		facturaID, claims.UserID,
+	).Scan(&archivoURL)
+	if err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+	if archivoURL == "" {
+		http.Error(w, `{"error":"no image"}`, http.StatusNotFound)
+		return
+	}
+
+	fallbackEndpoint := fmt.Sprintf("/api/facturas/%s/imagen", facturaID)
+
+	if h.imageStore == nil {
+		// No ImageStore injected — return fallback only.
+		json.NewEncoder(w).Encode(map[string]string{
+			"fallback_endpoint": fallbackEndpoint,
+		})
+		return
+	}
+
+	const signedURLTTL = 24 * time.Hour
+	signedURL, err := h.imageStore.GetSignedURL(r.Context(), archivoURL, signedURLTTL)
+	if err != nil {
+		// Non-fatal: log and return fallback so mobile app can still load image.
+		log.Printf("GetClientInvoiceImageSignedURL: GetSignedURL error for invoice %s: %v — returning fallback", facturaID, err)
+		json.NewEncoder(w).Encode(map[string]string{
+			"fallback_endpoint": fallbackEndpoint,
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"url":               signedURL,
+		"expires_at":        time.Now().Add(signedURLTTL).UTC().Format(time.RFC3339),
+		"fallback_endpoint": fallbackEndpoint,
+	})
+}
+
 // clientInvoiceToFrontend maps ClientInvoice DB fields to frontend Factura interface
 func clientInvoiceToFrontend(inv *db.ClientInvoice) map[string]interface{} {
 	fechaEmision := ""

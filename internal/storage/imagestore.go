@@ -2,8 +2,10 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // ImageStore abstracts the image storage backend (MinIO, Supabase, Dual).
@@ -18,7 +20,17 @@ type ImageStore interface {
 
 	// Delete removes an image by its archivo_url.
 	Delete(ctx context.Context, archivoURL string) error
+
+	// GetSignedURL generates a time-limited direct-access URL for the given archivo_url.
+	// For Supabase backends this avoids backend bandwidth by letting the frontend fetch
+	// directly from Supabase Storage. For MinIO it returns a presigned URL.
+	// Returns ErrNotSupported if the backend does not support signed URLs.
+	GetSignedURL(ctx context.Context, archivoURL string, expiresIn time.Duration) (string, error)
 }
+
+// ErrSignedURLNotSupported is returned by backends that do not support signed URL generation
+// (e.g. legacy MinIO paths where the client is not configured).
+var ErrSignedURLNotSupported = fmt.Errorf("signed URL not supported for this storage backend")
 
 // NewImageStore factory controlled by IMAGE_STORAGE_BACKEND env var.
 //
@@ -92,4 +104,12 @@ func (d *DualImageStore) Delete(ctx context.Context, archivoURL string) error {
 		return d.primary.Delete(ctx, archivoURL)
 	}
 	return d.secondary.Delete(ctx, archivoURL)
+}
+
+// GetSignedURL routes by prefix: supabase:// → Supabase, else → MinIO.
+func (d *DualImageStore) GetSignedURL(ctx context.Context, archivoURL string, expiresIn time.Duration) (string, error) {
+	if strings.HasPrefix(archivoURL, "supabase://") {
+		return d.primary.GetSignedURL(ctx, archivoURL, expiresIn)
+	}
+	return d.secondary.GetSignedURL(ctx, archivoURL, expiresIn)
 }

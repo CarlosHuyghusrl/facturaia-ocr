@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestParseSupabaseURL — unit tests for parseSupabaseURL helper.
@@ -174,6 +175,130 @@ func TestSupabaseImageStore_GetImage_404(t *testing.T) {
 	_, _, err := s.GetImage(context.Background(), "supabase://facturas-imagenes/missing/file.jpg")
 	if err == nil {
 		t.Error("expected error for 404, got nil")
+	}
+}
+
+// TestSupabaseImageStore_GetSignedURL_Parse — unit tests for GetSignedURL URL parsing logic.
+// Uses a mock HTTP server; does NOT require a real Supabase instance.
+func TestSupabaseImageStore_GetSignedURL_Parse(t *testing.T) {
+	tests := []struct {
+		name        string
+		archivoURL  string
+		serverResp  string // JSON body from mock server
+		serverCode  int
+		wantErr     bool
+		wantContain string // substring expected in returned URL
+	}{
+		{
+			name:        "valid supabase URL returns signed URL",
+			archivoURL:  "supabase://facturas-imagenes/empresa/2026/05/invoice.jpg",
+			serverResp:  `{"signedURL":"/object/sign/facturas-imagenes/empresa/2026/05/invoice.jpg?token=abc123"}`,
+			serverCode:  200,
+			wantErr:     false,
+			wantContain: "token=abc123",
+		},
+		{
+			name:        "absolute signed URL returned as-is",
+			archivoURL:  "supabase://facturas-imagenes/empresa/file.jpg",
+			serverResp:  `{"signedURL":"http://supabase.local/object/sign/facturas-imagenes/empresa/file.jpg?token=xyz"}`,
+			serverCode:  200,
+			wantErr:     false,
+			wantContain: "token=xyz",
+		},
+		{
+			name:       "server 400 returns error",
+			archivoURL: "supabase://facturas-imagenes/empresa/file.jpg",
+			serverResp: `{"error":"unauthorized"}`,
+			serverCode: 400,
+			wantErr:    true,
+		},
+		{
+			name:       "non-supabase URL returns error without HTTP call",
+			archivoURL: "facturas/huyghu/2026/01/file.jpg",
+			wantErr:    true,
+		},
+		{
+			name:       "empty signedURL in response returns error",
+			archivoURL: "supabase://facturas-imagenes/empresa/file.jpg",
+			serverResp: `{"signedURL":""}`,
+			serverCode: 200,
+			wantErr:    true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var srv *httptest.Server
+			if tc.serverResp != "" {
+				serverResp := tc.serverResp
+				serverCode := tc.serverCode
+				srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != "POST" {
+						t.Errorf("expected POST for sign, got %s", r.Method)
+					}
+					if !strings.Contains(r.URL.Path, "/object/sign/") {
+						t.Errorf("unexpected sign path: %s", r.URL.Path)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(serverCode)
+					w.Write([]byte(serverResp))
+				}))
+				defer srv.Close()
+			}
+
+			s := &SupabaseImageStore{
+				serviceKey: "test-key",
+				bucket:     "facturas-imagenes",
+			}
+			if srv != nil {
+				s.httpClient = srv.Client()
+				s.apiURL = srv.URL
+			} else {
+				// No server — use a real HTTP client but URL won't be reached for non-supabase URLs.
+				s.httpClient = &http.Client{}
+				s.apiURL = "http://127.0.0.1:0" // unreachable, only used if request would be made
+			}
+
+			got, err := s.GetSignedURL(context.Background(), tc.archivoURL, 24*time.Hour)
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got URL=%q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantContain != "" && !strings.Contains(got, tc.wantContain) {
+				t.Errorf("URL %q does not contain expected %q", got, tc.wantContain)
+			}
+		})
+	}
+}
+
+// TestSupabaseImageStore_GetSignedURL_RelativeURL — confirms relative signedURL is prepended with apiURL.
+func TestSupabaseImageStore_GetSignedURL_RelativeURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"signedURL":"/object/sign/facturas-imagenes/key?token=reltest"}`))
+	}))
+	defer srv.Close()
+
+	s := &SupabaseImageStore{
+		httpClient: srv.Client(),
+		apiURL:     srv.URL,
+		serviceKey: "test-key",
+		bucket:     "facturas-imagenes",
+	}
+
+	got, err := s.GetSignedURL(context.Background(), "supabase://facturas-imagenes/empresa/file.jpg", time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := srv.URL + "/object/sign/facturas-imagenes/key?token=reltest"
+	if got != expected {
+		t.Errorf("got %q, want %q", got, expected)
 	}
 }
 

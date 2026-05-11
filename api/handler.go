@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -77,6 +78,7 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/facturas/resumen", h.GetClientStats).Methods("GET")
 	router.Handle("/api/facturas/{id}/reprocesar", auth.RequireRole("admin", "contador")(http.HandlerFunc(h.ReprocesarClientInvoice))).Methods("POST")
 	router.HandleFunc("/api/facturas/{id}/imagen", h.GetClientInvoiceImage).Methods("GET")
+	router.HandleFunc("/api/facturas/{id}/imagen-signed-url", h.GetClientInvoiceImageSignedURL).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}", h.GetClientInvoice).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}", h.DeleteClientInvoice).Methods("DELETE")
 	// [WB1] BUG-01/BUG-03 fix — review/approve flow: escribir public.facturas_clientes
@@ -144,7 +146,11 @@ func (h *Handler) CheckDuplicateNCF(w http.ResponseWriter, r *http.Request) {
 	result, err := db.CheckDuplicateNCFByTipo(ctx, claims.UserID, ncf, tipo)
 	if err != nil {
 		// DB error → fail-open: allow save + log warning (no bloquear UX)
-		log.Printf("[CheckDuplicateNCF] DB error cliente=%s ncf=%s: %v", claims.UserID, ncf, err)
+		slog.Warn("CheckDuplicateNCF DB error — fail-open",
+			slog.String("cliente_id", claims.UserID),
+			slog.String("ncf", ncf),
+			slog.String("error", err.Error()),
+		)
 		json.NewEncoder(w).Encode(map[string]any{"exists": false})
 		return
 	}
@@ -400,7 +406,10 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		)
 		if err != nil {
 			// Log but don't fail - image storage is optional
-			fmt.Printf("Warning: failed to upload image to MinIO: %v\n", err)
+			slog.Warn("ProcessInvoice failed to upload image to MinIO",
+				slog.String("cliente_id", claims.UserID),
+				slog.String("error", err.Error()),
+			)
 		}
 	}
 
@@ -419,7 +428,10 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, ai.ErrAllProvidersFailed) {
 			// All AI providers failed transiently — save invoice for manual review
 			// The image is already in MinIO (uploaded before processInvoice was called)
-			log.Printf("[OCR] All AI providers failed: %v. Saving as revision_manual.", err)
+			slog.Warn("ProcessInvoice all AI providers failed — saving as revision_manual",
+				slog.String("cliente_id", claims.UserID),
+				slog.String("error", err.Error()),
+			)
 			if db.Pool != nil && imagenURL != "" {
 				manualInvoice := &db.ClientInvoice{
 					ClienteID:        claims.UserID,
@@ -430,7 +442,10 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 					ReviewNotes:      fmt.Sprintf(`{"error":"all_providers_failed","detail":%q}`, err.Error()),
 				}
 				if saveErr := db.SaveClientInvoice(ctx, manualInvoice); saveErr != nil {
-					log.Printf("[OCR] Failed to save revision_manual invoice: %v", saveErr)
+					slog.Error("ProcessInvoice failed to save revision_manual invoice",
+						slog.String("cliente_id", claims.UserID),
+						slog.String("error", saveErr.Error()),
+					)
 				}
 			}
 			w.WriteHeader(http.StatusOK)
@@ -678,7 +693,13 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := db.SaveClientInvoice(ctx, clientInvoice); err != nil {
-			log.Printf("ERROR SaveClientInvoice: %v (cliente_id=%s emisor_rnc=%s ncf=%s monto=%v)", err, clientInvoice.ClienteID, clientInvoice.EmisorRNC, clientInvoice.NCF, clientInvoice.Monto)
+			slog.Error("ProcessInvoice SaveClientInvoice failed",
+				slog.String("error", err.Error()),
+				slog.String("cliente_id", clientInvoice.ClienteID),
+				slog.String("emisor_rnc", clientInvoice.EmisorRNC),
+				slog.String("ncf", clientInvoice.NCF),
+				slog.Float64("monto", clientInvoice.Monto),
+			)
 			http.Error(w, fmt.Sprintf("DB save failed: %v", err), http.StatusInternalServerError)
 			return
 		} else {
@@ -693,9 +714,14 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 						 ON CONFLICT DO NOTHING`,
 						facturaID, clienteID, rncCliente, fechaFactura, archivoURL, archivoNombre)
 					if qErr != nil {
-						log.Printf("[SharePoint Queue] Error queueing factura %s: %v", facturaID, qErr)
+						slog.Error("SharePoint queue insert failed",
+							slog.String("factura_id", facturaID),
+							slog.String("error", qErr.Error()),
+						)
 					} else {
-						log.Printf("[SharePoint Queue] Queued factura %s for sync", facturaID)
+						slog.Info("SharePoint queue entry created",
+							slog.String("factura_id", facturaID),
+						)
 					}
 				}
 			}(clientInvoice.ID, clientInvoice.ClienteID, claims.EmpresaAlias, fechaDoc, imagenURL, filename)
@@ -855,7 +881,11 @@ func (h *Handler) GetInvoice(w http.ResponseWriter, r *http.Request) {
 
 	invoice, err := db.GetInvoiceByID(ctx, claims.EmpresaAlias, invoiceID)
 	if err != nil {
-		fmt.Printf("GetInvoiceByID error: %v (empresa=%s, id=%s)\n", err, claims.EmpresaAlias, invoiceID)
+		slog.Warn("GetInvoice not found",
+		slog.String("empresa", claims.EmpresaAlias),
+		slog.String("invoice_id", invoiceID),
+		slog.String("error", err.Error()),
+	)
 		h.sendError(w, http.StatusNotFound, fmt.Sprintf("invoice not found: %v", err))
 		return
 	}
@@ -1022,7 +1052,9 @@ func (h *Handler) processInvoice(
 		// For AI vision models (Gemini), send the ORIGINAL image - no grayscale
 		// Gemini reads color images better than grayscale preprocessed ones
 		imageBase64 = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(imageData)
-		fmt.Printf("[Process] Using original image for vision model (%d bytes)\n", len(imageData))
+		slog.Info("ProcessInvoice using original image for vision model",
+		slog.Int("bytes", len(imageData)),
+	)
 	} else {
 		// For Tesseract OCR, preprocess with grayscale+contrast
 		preprocessor := ocr.NewPreprocessor(h.config.OCR.Engine == "easyocr")
@@ -1199,7 +1231,10 @@ func (h *Handler) ReceiveErrorReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Log to stdout always
-	log.Printf("[ERROR_REPORT] level=%s message=%s", report.Level, report.Message)
+	slog.Info("ReceiveErrorReport",
+		slog.String("level", report.Level),
+		slog.String("message", report.Message),
+	)
 
 	// Save to DB if available
 	if db.Pool != nil {
@@ -1209,7 +1244,9 @@ func (h *Handler) ReceiveErrorReport(w http.ResponseWriter, r *http.Request) {
 			`INSERT INTO error_logs (message, stack, context, level, source) VALUES ($1, $2, $3, $4, 'mobile')`,
 			report.Message, report.Stack, contextJSON, report.Level)
 		if err != nil {
-			log.Printf("[ERROR_REPORT] Failed to save to DB: %v", err)
+			slog.Error("ReceiveErrorReport failed to save to DB",
+			slog.String("error", err.Error()),
+		)
 		}
 	}
 
@@ -1496,7 +1533,11 @@ func (h *Handler) UpdateClientInvoiceHandler(w http.ResponseWriter, r *http.Requ
 	// El SELECT también valida ownership (cliente_id = claims.UserID).
 	inv, err := db.GetClientInvoiceByID(ctx, claims.UserID, invoiceID)
 	if err != nil {
-		log.Printf("[UpdateClientInvoiceHandler] not found cliente=%s invoice=%s: %v", claims.UserID, invoiceID, err)
+		slog.Warn("UpdateClientInvoiceHandler invoice not found",
+		slog.String("cliente_id", claims.UserID),
+		slog.String("invoice_id", invoiceID),
+		slog.String("error", err.Error()),
+	)
 		h.sendError(w, http.StatusNotFound, "invoice not found")
 		return
 	}
@@ -1508,7 +1549,11 @@ func (h *Handler) UpdateClientInvoiceHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := db.UpdateClientInvoice(ctx, claims.UserID, invoiceID, inv); err != nil {
-		log.Printf("[UpdateClientInvoiceHandler] update error cliente=%s invoice=%s: %v", claims.UserID, invoiceID, err)
+		slog.Error("UpdateClientInvoiceHandler update failed",
+		slog.String("cliente_id", claims.UserID),
+		slog.String("invoice_id", invoiceID),
+		slog.String("error", err.Error()),
+	)
 		h.sendError(w, http.StatusInternalServerError, "failed to update invoice")
 		return
 	}

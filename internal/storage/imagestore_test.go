@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mockStore is a simple in-memory ImageStore for testing DualImageStore routing.
 type mockStore struct {
-	name      string
-	uploadFn  func(ctx context.Context, alias, filename string, data []byte, ct string) (string, error)
-	getImageFn func(ctx context.Context, archivoURL string) ([]byte, string, error)
-	deleteFn  func(ctx context.Context, archivoURL string) error
+	name           string
+	uploadFn       func(ctx context.Context, alias, filename string, data []byte, ct string) (string, error)
+	getImageFn     func(ctx context.Context, archivoURL string) ([]byte, string, error)
+	deleteFn       func(ctx context.Context, archivoURL string) error
+	getSignedURLFn func(ctx context.Context, archivoURL string, expiresIn time.Duration) (string, error)
 }
 
 func (m *mockStore) Upload(ctx context.Context, alias, filename string, data []byte, ct string) (string, error) {
@@ -34,6 +36,13 @@ func (m *mockStore) Delete(ctx context.Context, archivoURL string) error {
 		return m.deleteFn(ctx, archivoURL)
 	}
 	return nil
+}
+
+func (m *mockStore) GetSignedURL(ctx context.Context, archivoURL string, expiresIn time.Duration) (string, error) {
+	if m.getSignedURLFn != nil {
+		return m.getSignedURLFn(ctx, archivoURL, expiresIn)
+	}
+	return m.name + "-signed://" + archivoURL, nil
 }
 
 // TestDualImageStore_SchemaRouting verifies that DualImageStore routes reads

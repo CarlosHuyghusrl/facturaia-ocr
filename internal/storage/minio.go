@@ -188,6 +188,15 @@ func (m *MinIOImageStore) Delete(ctx context.Context, archivoURL string) error {
 	return DeleteImage(ctx, archivoURL)
 }
 
+// GetSignedURL generates a MinIO presigned GET URL for the given archivo_url.
+// Returns ErrSignedURLNotSupported if the MinIO client is not initialized.
+func (m *MinIOImageStore) GetSignedURL(ctx context.Context, archivoURL string, expiresIn time.Duration) (string, error) {
+	if Client == nil {
+		return "", ErrSignedURLNotSupported
+	}
+	return GetPresignedURL(ctx, archivoURL)
+}
+
 // GetFileExtension extracts file extension from content type
 func GetFileExtension(contentType string) string {
 	switch contentType {
