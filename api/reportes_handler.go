@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -274,8 +275,12 @@ func (h *Handler) GetFormato606(w http.ResponseWriter, r *http.Request) {
 	filename := fmt.Sprintf("DGII_F_606_%s_%s.TXT", rncReceptor, periodo)
 
 	// Save to envios_606 (non-blocking on error — still deliver the file)
+	// Use context.Background() with explicit timeout so the goroutine is NOT
+	// cancelled when the HTTP handler returns (fixes P2 context race condition).
 	go func() {
-		_, insErr := db.InsertEnvio606(ctx, claims.UserID, rncReceptor, periodo, contenido, filename,
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, insErr := db.InsertEnvio606(bgCtx, claims.UserID, rncReceptor, periodo, contenido, filename,
 			len(invoices), totalMonto, totalITBIS, totalAdelantar)
 		if insErr != nil {
 			log.Printf("GetFormato606: InsertEnvio606 error: %v", insErr)

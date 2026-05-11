@@ -983,6 +983,96 @@ func TestE2E_APK_Mobile_Flow_To_606(t *testing.T) {
 	t.Logf("TEST 5 OK: APK mobile flow end-to-end — login→upload→BD→606 TXT verified")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 6: TestGetFormato606_InsertEnvio606_Persists (KB 9170 — P2 context race)
+//
+// Verifies that the InsertEnvio606 goroutine in GetFormato606 uses
+// context.Background() (not the request ctx) so it is NOT cancelled when
+// the HTTP handler returns. After calling GET /api/formato-606, waits 2s for
+// the goroutine to complete and asserts envios_606 has a row for the period.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestGetFormato606_InsertEnvio606_Persists(t *testing.T) {
+	if os.Getenv("SETUP_E2E_TEST_DB") != "1" {
+		t.Skip("E2E test skipped: set SETUP_E2E_TEST_DB=1 + E2E_* env vars to run")
+	}
+	env := requireE2ESetup(t)
+	initE2EAuth(t, env.JWTSecret)
+	initE2EDB(t, env.DBURL)
+
+	ctx := context.Background()
+	periodo := time.Now().Format("200601")
+
+	// Setup handler + test server (no MinIO needed — envios_606 only)
+	cfg := &models.Config{
+		AI:  models.AIConfig{DefaultProvider: "openai"},
+		OCR: models.OCRConfig{Engine: "none", Language: "spa"},
+	}
+	h := NewHandler(cfg)
+	router := h.SetupRoutes()
+	srv := httptest.NewServer(auth.JWTMiddleware(router))
+	t.Cleanup(srv.Close)
+
+	token := e2eGenerateToken(t, env.ClienteID, env.RNCReceptor)
+
+	// Record the count of envios_606 rows BEFORE the call
+	var countBefore int
+	err := db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM envios_606
+		 WHERE cliente_id = $1::uuid AND periodo = $2`,
+		env.ClienteID, periodo).Scan(&countBefore)
+	if err != nil {
+		t.Fatalf("COUNT envios_606 before: %v", err)
+	}
+
+	// Call GET /api/formato-606/{rnc}?periodo=YYYYMM
+	url606 := fmt.Sprintf("%s/api/formato-606/%s?periodo=%s", srv.URL, env.RNCReceptor, periodo)
+	req606, _ := http.NewRequest(http.MethodGet, url606, nil)
+	req606.Header.Set("Authorization", "Bearer "+token)
+
+	resp606, err := http.DefaultClient.Do(req606)
+	if err != nil {
+		t.Fatalf("GET formato-606: %v", err)
+	}
+	defer resp606.Body.Close()
+	io.Copy(io.Discard, resp606.Body) // drain body
+
+	if resp606.StatusCode != http.StatusOK {
+		t.Fatalf("GET formato-606: expected 200, got %d", resp606.StatusCode)
+	}
+
+	// Wait for the background goroutine (30s timeout in production; 2s sufficient in test)
+	time.Sleep(2 * time.Second)
+
+	// Assert envios_606 count increased by at least 1
+	var countAfter int
+	err = db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM envios_606
+		 WHERE cliente_id = $1::uuid AND periodo = $2`,
+		env.ClienteID, periodo).Scan(&countAfter)
+	if err != nil {
+		t.Fatalf("COUNT envios_606 after: %v", err)
+	}
+
+	if countAfter <= countBefore {
+		t.Errorf("P2 regression: envios_606 not persisted — before=%d after=%d (goroutine context was cancelled?)",
+			countBefore, countAfter)
+	} else {
+		t.Logf("P2 OK: InsertEnvio606 persisted — envios_606 before=%d after=%d (delta=%d)",
+			countBefore, countAfter, countAfter-countBefore)
+	}
+
+	// Cleanup: remove test envios_606 rows inserted by this test
+	_, cleanErr := db.Pool.Exec(ctx,
+		`DELETE FROM envios_606
+		 WHERE cliente_id = $1::uuid AND periodo = $2
+		   AND created_at > NOW() - INTERVAL '1 minute'`,
+		env.ClienteID, periodo)
+	if cleanErr != nil {
+		t.Logf("cleanup envios_606: %v (non-fatal)", cleanErr)
+	}
+}
+
 // min returns the smaller of two ints (Go 1.20 compatibility — avoid math/min for older toolchains).
 func min(a, b int) int {
 	if a < b {

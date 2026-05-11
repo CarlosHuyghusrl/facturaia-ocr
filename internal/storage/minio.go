@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -64,6 +65,11 @@ func Init() error {
 // UploadInvoiceImage uploads an invoice image with multi-tenant path structure
 // Path format: {empresa_alias}/YYYY/MM/{filename}
 func UploadInvoiceImage(ctx context.Context, empresaAlias string, filename string, reader io.Reader, size int64, contentType string) (string, error) {
+	// Capa 1: defensive fallback — empresaAlias="" would produce a leading slash
+	if empresaAlias == "" {
+		empresaAlias = "default"
+	}
+
 	now := time.Now()
 	objectName := fmt.Sprintf("%s/%d/%02d/%s",
 		empresaAlias,
@@ -71,6 +77,12 @@ func UploadInvoiceImage(ctx context.Context, empresaAlias string, filename strin
 		now.Month(),
 		filename,
 	)
+
+	// Capa 2: collapse any accidental double slashes (defense in depth)
+	for strings.Contains(objectName, "//") {
+		objectName = strings.ReplaceAll(objectName, "//", "/")
+	}
+	objectName = strings.TrimPrefix(objectName, "/")
 
 	_, err := Client.PutObject(ctx, BucketName, objectName, reader, size, minio.PutObjectOptions{
 		ContentType: contentType,
@@ -80,7 +92,14 @@ func UploadInvoiceImage(ctx context.Context, empresaAlias string, filename strin
 	}
 
 	// Return the full path for storage in DB
-	return fmt.Sprintf("%s/%s", BucketName, objectName), nil
+	fullPath := fmt.Sprintf("%s/%s", BucketName, objectName)
+
+	// Capa 3: final normalize — ensure no double slashes in returned path
+	for strings.Contains(fullPath, "//") {
+		fullPath = strings.ReplaceAll(fullPath, "//", "/")
+	}
+
+	return fullPath, nil
 }
 
 // GetPresignedURL generates a presigned URL for viewing an image
