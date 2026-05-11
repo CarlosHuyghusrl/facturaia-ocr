@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -10,17 +11,22 @@ import (
 	"github.com/facturaIA/invoice-ocr-service/api"
 	"github.com/facturaIA/invoice-ocr-service/internal/auth"
 	"github.com/facturaIA/invoice-ocr-service/internal/db"
+	"github.com/facturaIA/invoice-ocr-service/internal/logging"
 	"github.com/facturaIA/invoice-ocr-service/internal/models"
 	"github.com/facturaIA/invoice-ocr-service/internal/storage"
+	"github.com/facturaIA/invoice-ocr-service/internal/version"
 	"gopkg.in/yaml.v3"
 )
 
 func main() {
+	// Initialize structured logging (must be first — controls slog default handler).
+	logging.Init()
+
 	// Initialize JWT
 	if err := auth.Init(); err != nil {
 		log.Fatalf("Failed to initialize auth: %v", err)
 	}
-	log.Println("JWT authentication initialized")
+	slog.Info("JWT authentication initialized")
 
 	// Initialize database connection pool with retry
 	{
@@ -29,18 +35,25 @@ func main() {
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			if dbErr = db.Init(); dbErr == nil {
 				defer db.Close()
-				log.Println("Database connection pool initialized")
+				slog.Info("Database connection pool initialized")
 				break
 			}
 			if attempt < maxRetries {
 				delay := time.Duration(1<<uint(attempt)) * time.Second // 2s, 4s, 8s, 16s
-				log.Printf("Database connection attempt %d/%d failed: %v. Retrying in %v...", attempt, maxRetries, dbErr, delay)
+				slog.Warn("Database connection attempt failed",
+					slog.Int("attempt", attempt),
+					slog.Int("max_retries", maxRetries),
+					slog.String("error", dbErr.Error()),
+					slog.String("retry_in", delay.String()),
+				)
 				time.Sleep(delay)
 			}
 		}
 		if dbErr != nil {
-			log.Printf("Warning: Database not available after %d attempts: %v", maxRetries, dbErr)
-			log.Println("Running in OCR-only mode (no persistence)")
+			slog.Warn("Database not available — running in OCR-only mode",
+				slog.Int("attempts", maxRetries),
+				slog.String("error", dbErr.Error()),
+			)
 			// Background reconnection goroutine
 			go func() {
 				for {
@@ -48,12 +61,12 @@ func main() {
 					if db.Pool != nil {
 						return // Already connected
 					}
-					log.Println("Attempting database reconnection...")
+					slog.Info("Attempting database reconnection")
 					if err := db.Init(); err == nil {
-						log.Println("Database reconnected successfully!")
+						slog.Info("Database reconnected successfully")
 						return
 					} else {
-						log.Printf("Database reconnection failed: %v", err)
+						slog.Warn("Database reconnection failed", slog.String("error", err.Error()))
 					}
 				}
 			}()
@@ -62,19 +75,19 @@ func main() {
 
 	// Initialize MinIO storage (legacy; always attempted for backward compat).
 	if err := storage.Init(); err != nil {
-		log.Printf("Warning: MinIO storage not available: %v", err)
-		log.Println("Images will not be stored via MinIO")
+		slog.Warn("MinIO storage not available — images will not be stored",
+			slog.String("error", err.Error()),
+		)
 	} else {
-		log.Println("MinIO storage initialized")
+		slog.Info("MinIO storage initialized")
 	}
 
 	// Initialize ImageStore (factory: minio | supabase | dual).
 	// Controlled by IMAGE_STORAGE_BACKEND env var.
 	imageStore := storage.NewImageStore()
-	log.Printf("ImageStore backend: %q (env IMAGE_STORAGE_BACKEND=%q, SUPABASE_STORAGE_URL set=%v)",
-		os.Getenv("IMAGE_STORAGE_BACKEND"),
-		os.Getenv("IMAGE_STORAGE_BACKEND"),
-		os.Getenv("SUPABASE_STORAGE_URL") != "",
+	slog.Info("ImageStore backend selected",
+		slog.String("backend", os.Getenv("IMAGE_STORAGE_BACKEND")),
+		slog.Bool("supabase_storage_url_set", os.Getenv("SUPABASE_STORAGE_URL") != ""),
 	)
 
 	// Load configuration
@@ -98,20 +111,15 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
-	log.Printf("Starting Invoice OCR Service v2.33.0 on %s", addr)
-	log.Printf("OCR Engine: %s", config.OCR.Engine)
-	log.Printf("Default AI Provider: %s", config.AI.DefaultProvider)
-	log.Printf("Database: %v", db.Pool != nil)
-	log.Printf("Storage: %v", storage.Client != nil)
-	log.Printf("Endpoints:")
-	log.Printf("  POST http://%s/api/login              - Authenticate", addr)
-	log.Printf("  POST http://%s/api/process-invoice    - Process invoice (requires JWT)", addr)
-	log.Printf("  GET  http://%s/api/invoices           - Get all invoices (requires JWT)", addr)
-	log.Printf("  GET  http://%s/api/invoice/{id}       - Get single invoice (requires JWT)", addr)
-	log.Printf("  PUT  http://%s/api/invoice/{id}       - Update invoice (requires JWT)", addr)
-	log.Printf("  DELETE http://%s/api/invoice/{id}     - Delete invoice (requires JWT)", addr)
-	log.Printf("  GET  http://%s/api/stats              - Get monthly stats (requires JWT)", addr)
-	log.Printf("  GET  http://%s/health                 - Health check", addr)
+	slog.Info("Starting Invoice OCR Service",
+		slog.String("version", version.Version),
+		slog.String("commit", version.Commit),
+		slog.String("addr", addr),
+		slog.String("ocr_engine", config.OCR.Engine),
+		slog.String("ai_provider", config.AI.DefaultProvider),
+		slog.Bool("db_available", db.Pool != nil),
+		slog.Bool("storage_available", storage.Client != nil),
+	)
 
 	if err := http.ListenAndServe(addr, protectedRouter); err != nil {
 		log.Fatalf("Server failed: %v", err)

@@ -16,8 +16,17 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+# Build-time version injection (override with --build-arg VERSION=$(git describe --tags) GIT_COMMIT=$(git rev-parse --short HEAD))
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+
 # Build with optimizations for smaller binary and lower memory usage
-RUN CGO_ENABLED=1 GOOS=linux go build     -a     -installsuffix cgo     -ldflags="-s -w"     -o server     ./cmd/server
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -a \
+    -installsuffix cgo \
+    -ldflags="-s -w -X github.com/facturaIA/invoice-ocr-service/internal/version.Version=${VERSION} -X github.com/facturaIA/invoice-ocr-service/internal/version.Commit=${GIT_COMMIT}" \
+    -o server \
+    ./cmd/server
 
 # Stage 2: Runtime
 FROM alpine:latest

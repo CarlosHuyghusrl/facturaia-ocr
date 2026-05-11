@@ -212,7 +212,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	// Build response
 	response := HealthResponse{
 		Status:    "healthy",
-		Version:   Version,
+		Version:   version.Version,
 		Timestamp: time.Now().Format(time.RFC3339),
 		Uptime:    time.Since(startTime).String(),
 		Memory: MemoryStats{
