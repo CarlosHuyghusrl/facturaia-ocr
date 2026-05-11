@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -126,6 +127,65 @@ func DeleteImage(ctx context.Context, objectPath string) error {
 	}
 
 	return Client.RemoveObject(ctx, BucketName, objectName, minio.RemoveObjectOptions{})
+}
+
+// =============================================================================
+// MinIOImageStore — ImageStore wrapper around the existing package-level MinIO
+// functions. Allows DualImageStore and NewImageStore() to use MinIO without
+// changing the existing callsites in handler.go / client_handlers.go.
+// =============================================================================
+
+// MinIOImageStore implements ImageStore on top of MinIO.
+type MinIOImageStore struct{}
+
+// NewMinIOImageStore returns a MinIOImageStore. It uses the package-level Client
+// and BucketName initialized by Init().
+func NewMinIOImageStore() *MinIOImageStore { return &MinIOImageStore{} }
+
+// Upload stores image bytes using the existing UploadInvoiceImage logic.
+func (m *MinIOImageStore) Upload(ctx context.Context, empresaAlias, filename string, data []byte, contentType string) (string, error) {
+	reader := bytes.NewReader(data)
+	return UploadInvoiceImage(ctx, empresaAlias, filename, reader, int64(len(data)), contentType)
+}
+
+// GetImage fetches an image from MinIO by its archivo_url (legacy MinIO path).
+// Supports paths with or without the bucket prefix.
+func (m *MinIOImageStore) GetImage(ctx context.Context, archivoURL string) ([]byte, string, error) {
+	if Client == nil {
+		return nil, "", fmt.Errorf("minio: client not initialized")
+	}
+	objectName := archivoURL
+	prefix := BucketName + "/"
+	if strings.HasPrefix(objectName, prefix) {
+		objectName = objectName[len(prefix):]
+	}
+
+	obj, err := Client.GetObject(ctx, BucketName, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, "", fmt.Errorf("minio get object: %w", err)
+	}
+	defer obj.Close()
+
+	info, err := obj.Stat()
+	if err != nil {
+		return nil, "", fmt.Errorf("minio stat object: %w", err)
+	}
+
+	ct := info.ContentType
+	if ct == "" || ct == "application/octet-stream" {
+		ct = "image/jpeg"
+	}
+
+	data, err := io.ReadAll(obj)
+	if err != nil {
+		return nil, "", fmt.Errorf("minio read object: %w", err)
+	}
+	return data, ct, nil
+}
+
+// Delete removes an image from MinIO by its archivo_url.
+func (m *MinIOImageStore) Delete(ctx context.Context, archivoURL string) error {
+	return DeleteImage(ctx, archivoURL)
 }
 
 // GetFileExtension extracts file extension from content type

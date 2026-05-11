@@ -35,7 +35,8 @@ const (
 
 // Handler handles HTTP requests for invoice processing
 type Handler struct {
-	config *models.Config
+	config     *models.Config
+	imageStore storage.ImageStore // nil → legacy MinIO direct access
 }
 
 // NewHandler creates a new API handler
@@ -43,6 +44,12 @@ func NewHandler(config *models.Config) *Handler {
 	return &Handler{
 		config: config,
 	}
+}
+
+// WithImageStore sets the ImageStore backend (called from main after Init).
+func (h *Handler) WithImageStore(store storage.ImageStore) *Handler {
+	h.imageStore = store
+	return h
 }
 
 // SetupRoutes configures the HTTP routes

@@ -60,13 +60,22 @@ func main() {
 		}
 	}
 
-	// Initialize MinIO storage
+	// Initialize MinIO storage (legacy; always attempted for backward compat).
 	if err := storage.Init(); err != nil {
 		log.Printf("Warning: MinIO storage not available: %v", err)
-		log.Println("Images will not be stored")
+		log.Println("Images will not be stored via MinIO")
 	} else {
 		log.Println("MinIO storage initialized")
 	}
+
+	// Initialize ImageStore (factory: minio | supabase | dual).
+	// Controlled by IMAGE_STORAGE_BACKEND env var.
+	imageStore := storage.NewImageStore()
+	log.Printf("ImageStore backend: %q (env IMAGE_STORAGE_BACKEND=%q, SUPABASE_STORAGE_URL set=%v)",
+		os.Getenv("IMAGE_STORAGE_BACKEND"),
+		os.Getenv("IMAGE_STORAGE_BACKEND"),
+		os.Getenv("SUPABASE_STORAGE_URL") != "",
+	)
 
 	// Load configuration
 	config, err := loadConfig("config.yaml")
@@ -74,8 +83,8 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Create API handler
-	handler := api.NewHandler(config)
+	// Create API handler and inject ImageStore.
+	handler := api.NewHandler(config).WithImageStore(imageStore)
 	router := handler.SetupRoutes()
 
 	// Add login endpoint

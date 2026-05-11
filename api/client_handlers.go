@@ -338,14 +338,10 @@ func (h *Handler) ReprocesarClientInvoice(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// GetClientInvoiceImage - GET /api/facturas/{id}/imagen - Proxy MinIO image
-// Validates client ownership when JWT is present
+// GetClientInvoiceImage - GET /api/facturas/{id}/imagen - Proxy image from MinIO or Supabase.
+// Routes by archivo_url prefix: "supabase://" → Supabase Storage, else → MinIO.
+// Validates client ownership via JWT when present.
 func (h *Handler) GetClientInvoiceImage(w http.ResponseWriter, r *http.Request) {
-	if storage.Client == nil {
-		http.Error(w, "storage not available", http.StatusServiceUnavailable)
-		return
-	}
-
 	vars := mux.Vars(r)
 	invoiceID := vars["id"]
 
@@ -354,14 +350,14 @@ func (h *Handler) GetClientInvoiceImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Check JWT if present - verify ownership
+	// Resolve archivo_url from DB, enforcing ownership via JWT when present.
 	var archivoURL string
 	authHeader := r.Header.Get("Authorization")
 	if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := auth.ValidateToken(tokenStr)
 		if err == nil && claims.UserID != "" {
-			// JWT present and valid - enforce ownership check
+			// JWT present and valid — enforce ownership.
 			err = db.Pool.QueryRow(r.Context(),
 				"SELECT COALESCE(archivo_url, '') FROM facturas_clientes WHERE id = $1::uuid AND cliente_id = $2::uuid",
 				invoiceID, claims.UserID,
@@ -371,12 +367,11 @@ func (h *Handler) GetClientInvoiceImage(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		} else {
-			// Invalid token - deny
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return
 		}
 	} else {
-		// No JWT - UUID-only access (legacy, log warning)
+		// No JWT — UUID-only access (legacy, log warning).
 		log.Printf("WARNING: Image access without JWT for invoice %s from %s", invoiceID, r.RemoteAddr)
 		err := db.Pool.QueryRow(r.Context(),
 			"SELECT COALESCE(archivo_url, '') FROM facturas_clientes WHERE id = $1::uuid", invoiceID,
@@ -387,7 +382,26 @@ func (h *Handler) GetClientInvoiceImage(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Remove bucket prefix to get object name
+	// === ImageStore path (dual/supabase/minio via factory) ===
+	if h.imageStore != nil {
+		imgData, ct, err := h.imageStore.GetImage(r.Context(), archivoURL)
+		if err != nil {
+			log.Printf("GetClientInvoiceImage: ImageStore error for %s: %v", archivoURL, err)
+			http.Error(w, "image not available", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(imgData) //nolint:errcheck
+		return
+	}
+
+	// === Legacy MinIO fallback (imageStore not injected) ===
+	if storage.Client == nil {
+		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+		return
+	}
+
 	objectName := archivoURL
 	prefix := storage.BucketName + "/"
 	if strings.HasPrefix(objectName, prefix) {
@@ -416,7 +430,7 @@ func (h *Handler) GetClientInvoiceImage(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	io.Copy(w, obj)
+	io.Copy(w, obj) //nolint:errcheck
 }
 
 // clientInvoiceToFrontend maps ClientInvoice DB fields to frontend Factura interface
