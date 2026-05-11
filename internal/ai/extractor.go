@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -49,8 +50,13 @@ func (e *Extractor) Extract(ocrText string, imageBase64 string) (*models.Invoice
 	duration := time.Since(startTime).Seconds()
 
 	// Log AI response for debugging
-	fmt.Printf("[AI Response] Vision mode: %v, Response length: %d\n", isVisionMode, len(response))
-	fmt.Printf("[AI Response] Raw: %s\n", response)
+	slog.Info("AI extraction response received",
+		slog.Bool("vision_mode", isVisionMode),
+		slog.Int("response_length", len(response)),
+	)
+	slog.Info("AI extraction raw response",
+		slog.String("raw", response),
+	)
 
 	// Parse JSON response
 	invoice, err := e.parseResponseDGII(response, ocrText)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -66,17 +67,24 @@ func (f *FallbackProvider) ExtractData(prompt string, imageBase64 string) (strin
 		result, err := np.provider.ExtractData(prompt, imageBase64)
 		if err == nil {
 			if len(f.providers) > 1 {
-				fmt.Printf("[FallbackProvider] Success with provider: %s\n", np.name)
+				slog.Info("FallbackProvider success",
+					slog.String("provider", np.name),
+				)
 			}
 			return result, nil
 		}
 		lastErr = err
-		fmt.Printf("[FallbackProvider] Provider %s failed: %v\n", np.name, err)
+		slog.Warn("FallbackProvider provider failed",
+			slog.String("provider", np.name),
+			slog.String("error", err.Error()),
+		)
 		if !isCooldownError(err) {
 			// Non-transient error — don't try next provider, return immediately
 			return "", err
 		}
-		fmt.Printf("[FallbackProvider] Transient error on %s, trying next provider...\n", np.name)
+		slog.Warn("FallbackProvider transient error — trying next provider",
+			slog.String("provider", np.name),
+		)
 	}
 	return "", fmt.Errorf("%w: last error: %v", ErrAllProvidersFailed, lastErr)
 }

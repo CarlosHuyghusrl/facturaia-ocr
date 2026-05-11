@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -105,6 +106,10 @@ func JWTMiddleware(next http.Handler) http.Handler {
 
 		claims, err := ValidateToken(parts[1])
 		if err != nil {
+			slog.Warn("JWT auth failure",
+				slog.String("path", r.URL.Path),
+				slog.String("error", err.Error()),
+			)
 			http.Error(w, fmt.Sprintf(`{"error":"invalid token: %s"}`, err.Error()), http.StatusUnauthorized)
 			return
 		}
