@@ -388,6 +388,13 @@ func SaveClientInvoice(ctx context.Context, inv *ClientInvoice) error {
 		empresaIDArg = *inv.EmpresaID
 	}
 
+	// W21fix B-N1: hora_factura columna VARCHAR(5) en BD — truncar si Gemini OCR
+	// devuelve "HH:MM:SS" (8 chars) en vez de "HH:MM" (5 chars). Sin esto,
+	// INSERT falla con SQLSTATE 22001 y SaveClientInvoice retorna error.
+	if len(inv.HoraFactura) > 5 {
+		inv.HoraFactura = inv.HoraFactura[:5]
+	}
+
 	query := `
 		INSERT INTO facturas_clientes (
 			cliente_id, empresa_id, archivo_url, archivo_nombre, archivo_size,
