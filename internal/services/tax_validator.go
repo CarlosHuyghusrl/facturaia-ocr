@@ -224,14 +224,33 @@ func (v *TaxValidator) validateITBIS(input *InvoiceInput, result *ValidationResu
 	// W17.1 — IA fiscal skill: respect IA categorization
 	// "exento" = proveedor servicio básico — skip strict ITBIS, trust IA
 	// "mixto"  = supermercado multi-tasa — skip strict ITBIS, trust IA
+	// v2.46.0: añadir warning explicativo en vez de skip silencioso (UX bug F1).
 	categoriaLower := strings.ToLower(input.CategoriaITBIS)
-	if categoriaLower == "exento" || categoriaLower == "mixto" {
+	if categoriaLower == "exento" {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "itbis_facturado",
+			Code:    "itbis_skip_exento",
+			Message: "Proveedor de servicio básico exento — ITBIS no se valida con regla 18% estricta",
+		})
+		return
+	}
+	if categoriaLower == "mixto" {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "itbis_facturado",
+			Code:    "itbis_skip_mixto",
+			Message: "Factura mixta (productos a 18% + exentos/16%) — ITBIS facturado corresponde solo a items gravados, no es 18% del subtotal completo",
+		})
 		return
 	}
 
 	// If IA identified a non-comercio sector and did NOT flag requiere_correccion, trust IA
 	sectorLower := strings.ToLower(input.SectorProveedor)
 	if sectorLower != "" && sectorLower != "comercio" && !input.RequiereCorreccion {
+		result.Warnings = append(result.Warnings, ValidationWarning{
+			Field:   "itbis_facturado",
+			Code:    "itbis_skip_sector",
+			Message: "Sector " + sectorLower + " — reglas ITBIS específicas, no se valida con 18% estricto",
+		})
 		return
 	}
 
@@ -372,30 +391,40 @@ func (v *TaxValidator) validateNCF(input *InvoiceInput, result *ValidationResult
 	}
 
 	// Validate NCF type (first 3 chars after B/E)
-	// B01=Crédito Fiscal, B02=Consumidor Final, B04=Nota Crédito,
-	// B14=Régimen Especial, B15=Gubernamental, B16=Exportación
+	// Cita: skill dgii-fiscal §3 + DGII e-CF spec 2024 verificada 120526
+	// Fix v2.46.0: E32/E33/E34 estaban INVERTIDOS en versión anterior;
+	// añadidos B03, B11, B12, B13, B17, E46, E47 que faltaban.
 	tipoNCF := cleanedNCF[0:3]
 	validTypes := map[string]string{
+		// NCF tradicionales (papel)
 		"B01": "Factura Crédito Fiscal",
-		"B02": "Factura Consumidor Final",
+		"B02": "Factura Consumo",
+		"B03": "Nota de Débito",
 		"B04": "Nota de Crédito",
+		"B11": "Proveedor Informal",
+		"B12": "Registro Único de Ingresos",
+		"B13": "Gastos Menores",
 		"B14": "Régimen Especial",
 		"B15": "Gubernamental",
 		"B16": "Exportación",
-		"E31": "Factura Electrónica",
-		"E32": "Nota Débito Electrónica",
-		"E33": "Nota Crédito Electrónica",
-		"E34": "Compras Electrónicas",
-		"E41": "Comprobante Compras",
-		"E43": "Gastos Menores",
-		"E44": "Regímenes Especiales",
-		"E45": "Gubernamental",
+		"B17": "Pagos al Exterior",
+		// e-CF electrónicos (Ley 32-23)
+		"E31": "Factura Crédito Fiscal Electrónica",
+		"E32": "Factura Consumo Electrónica",
+		"E33": "Nota de Débito Electrónica",
+		"E34": "Nota de Crédito Electrónica",
+		"E41": "Compras Electrónica",
+		"E43": "Gastos Menores Electrónica",
+		"E44": "Régimen Especial Electrónica",
+		"E45": "Gubernamental Electrónica",
+		"E46": "Exportación Electrónica",
+		"E47": "Pagos al Exterior Electrónica",
 	}
 	if _, valid := validTypes[tipoNCF]; !valid {
 		result.Warnings = append(result.Warnings, ValidationWarning{
 			Field:   "ncf",
 			Code:    "ncf_unknown_type",
-			Message: "Tipo de NCF no reconocido: " + tipoNCF,
+			Message: "Tipo de NCF no reconocido: " + tipoNCF + " — DGII admite B01-B17, E31-E47. Verifica si OCR leyó mal (ej: E12 podría ser E32).",
 		})
 	}
 
@@ -532,9 +561,11 @@ func (v *TaxValidator) validateISCSeguros(input *InvoiceInput, result *Validatio
 	}
 }
 
-// validateNotaCredito checks that credit notes reference the original invoice NCF
+// validateNotaCredito checks that credit notes reference the original invoice NCF.
+// Fix v2.46.0: E33 es Nota Débito (no crédito), E34 es Nota Crédito.
+// Tipos nota crédito reales: B04 (papel), E34 (electrónica).
 func (v *TaxValidator) validateNotaCredito(input *InvoiceInput, result *ValidationResult) {
-	notaCreditoTypes := map[string]bool{"B04": true, "E33": true, "E34": true}
+	notaCreditoTypes := map[string]bool{"B04": true, "E34": true}
 	if !notaCreditoTypes[input.TipoNCF] {
 		return
 	}
