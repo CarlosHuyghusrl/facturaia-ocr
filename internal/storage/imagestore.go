@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -77,8 +78,10 @@ func NewDualImageStore() *DualImageStore {
 	}
 }
 
-// Upload writes to Supabase (primary); if that fails, writes MinIO only.
+// Upload writes to Supabase (primary); if that fails, falls back to MinIO.
 // On primary success also writes MinIO as backup (silent failure OK).
+// Logs primary failure with WARN to surface transient Supabase issues
+// (prevents silent image loss when both backends fail — fix 120526).
 func (d *DualImageStore) Upload(ctx context.Context, empresaAlias, filename string, data []byte, contentType string) (string, error) {
 	path, err := d.primary.Upload(ctx, empresaAlias, filename, data, contentType)
 	if err == nil {
@@ -86,8 +89,19 @@ func (d *DualImageStore) Upload(ctx context.Context, empresaAlias, filename stri
 		_, _ = d.secondary.Upload(ctx, empresaAlias, filename, data, contentType)
 		return path, nil
 	}
-	// Supabase failed — fall back to MinIO only.
-	return d.secondary.Upload(ctx, empresaAlias, filename, data, contentType)
+	// Supabase failed — log WARN and fall back to MinIO.
+	slog.Warn("DualImageStore primary (Supabase) Upload failed — falling back to MinIO",
+		slog.String("empresa_alias", empresaAlias),
+		slog.String("filename", filename),
+		slog.Int("size_bytes", len(data)),
+		slog.String("primary_error", err.Error()),
+	)
+	path, secondaryErr := d.secondary.Upload(ctx, empresaAlias, filename, data, contentType)
+	if secondaryErr != nil {
+		// Both backends failed — return combined error so handler doesn't save NULL archivo_url.
+		return "", fmt.Errorf("dual upload failed: primary=%w; secondary=%v", err, secondaryErr)
+	}
+	return path, nil
 }
 
 // GetImage routes by prefix: supabase:// → Supabase, else → MinIO.
