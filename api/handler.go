@@ -391,21 +391,29 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		storage.GetFileExtension(contentType),
 	)
 
-	// Upload to MinIO (if configured)
+	// Upload via ImageStore (DualImageStore writes to Supabase + optional MinIO fallback)
 	var imagenURL string
-	if storage.Client != nil {
-		imageReader := bytes.NewReader(imageData)
-		imagenURL, err = storage.UploadInvoiceImage(
-			ctx,
-			claims.EmpresaAlias,
-			filename,
-			imageReader,
-			int64(len(imageData)),
-			contentType,
-		)
+	if h.imageStore != nil {
+		imagenURL, err = h.imageStore.Upload(ctx, claims.EmpresaAlias, filename, imageData, contentType)
 		if err != nil {
-			// Log but don't fail - image storage is optional
-			slog.Warn("ProcessInvoice failed to upload image to MinIO",
+			slog.Warn("ProcessInvoice ImageStore.Upload failed",
+				slog.String("cliente_id", claims.UserID),
+				slog.String("backend", "supabase/minio dual"),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			slog.Info("ProcessInvoice image uploaded",
+				slog.String("cliente_id", claims.UserID),
+				slog.String("archivo_url", imagenURL),
+			)
+		}
+	} else if storage.Client != nil {
+		// Legacy fallback if imageStore not injected
+		imageReader := bytes.NewReader(imageData)
+		imagenURL, err = storage.UploadInvoiceImage(ctx, claims.EmpresaAlias, filename, imageReader,
+			int64(len(imageData)), contentType)
+		if err != nil {
+			slog.Warn("ProcessInvoice legacy MinIO upload failed",
 				slog.String("cliente_id", claims.UserID),
 				slog.String("error", err.Error()),
 			)
