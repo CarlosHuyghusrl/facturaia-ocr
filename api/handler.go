@@ -75,7 +75,7 @@ func (h *Handler) SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/facturas/upload/", h.ProcessInvoice).Methods("POST")
 	router.HandleFunc("/api/facturas/mis-facturas/", h.GetClientInvoices).Methods("GET")
 	router.HandleFunc("/api/facturas/resumen", h.GetClientStats).Methods("GET")
-	router.Handle("/api/facturas/{id}/reprocesar", auth.RequireRole("admin", "contador")(http.HandlerFunc(h.ReprocesarClientInvoice))).Methods("POST")
+	router.HandleFunc("/api/facturas/{id}/reprocesar", h.ReprocesarClientInvoice).Methods("POST")
 	router.HandleFunc("/api/facturas/{id}/imagen", h.GetClientInvoiceImage).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}/imagen-signed-url", h.GetClientInvoiceImageSignedURL).Methods("GET")
 	router.HandleFunc("/api/facturas/{id}", h.GetClientInvoice).Methods("GET")

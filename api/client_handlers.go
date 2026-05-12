@@ -212,32 +212,17 @@ func (h *Handler) ReprocesarClientInvoice(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Download image from MinIO
-	if storage.Client == nil {
+	// Download image via DualImageStore (schema-aware: supabase:// → Supabase, else → MinIO legacy)
+	if h.imageStore == nil {
 		sendAppError(w, ErrStorageUnavailable)
 		return
 	}
 
-	// Remove bucket prefix to get object name
-	objectName := invoice.ArchivoURL
-	prefix := storage.BucketName + "/"
-	if strings.HasPrefix(objectName, prefix) {
-		objectName = objectName[len(prefix):]
-	}
-
-	obj, err := storage.Client.GetObject(r.Context(), storage.BucketName, objectName, minio.GetObjectOptions{})
+	imageData, _, err := h.imageStore.GetImage(r.Context(), invoice.ArchivoURL)
 	if err != nil {
-		log.Printf("ReprocesarClientInvoice: MinIO error: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "failed to retrieve image from storage")
-		return
-	}
-	defer obj.Close()
-
-	// Read image bytes
-	imageData, err := io.ReadAll(obj)
-	if err != nil {
-		log.Printf("ReprocesarClientInvoice: Read error: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "failed to read image")
+		log.Printf("ReprocesarClientInvoice: GetImage failed factura_id=%s archivo_url=%s err=%v",
+			invoiceID, invoice.ArchivoURL, err)
+		h.sendError(w, http.StatusInternalServerError, "image not available for reprocesar")
 		return
 	}
 
