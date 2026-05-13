@@ -331,6 +331,16 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	startTime := time.Now()
 
+	// V22 B-N3: timing metrics baseline OCR pipeline para diagnosticar lentitud percepción.
+	// Logs por etapa permiten comparar baseline vs producción real Carlos.
+	var stageTimings struct {
+		UploadParse  time.Duration
+		ImageStore   time.Duration
+		AIExtraction time.Duration
+		DBSave       time.Duration
+		Total        time.Duration
+	}
+
 	// Get claims from JWT
 	claims, err := auth.GetClaimsFromContext(ctx)
 	if err != nil {
@@ -363,6 +373,10 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		h.sendError(w, http.StatusInternalServerError, "Failed to read file")
 		return
 	}
+
+	// Stage 1: upload/parse complete
+	stageTimings.UploadParse = time.Since(startTime)
+	imageStoreStart := time.Now()
 
 	// Get optional parameters
 	aiProvider := r.FormValue("aiProvider")
@@ -420,6 +434,10 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Stage 2: image store upload complete
+	stageTimings.ImageStore = time.Since(imageStoreStart)
+	aiExtractionStart := time.Now()
+
 	// Process OCR
 	invoice, ocrDuration, aiDuration, _, err := h.processInvoice(
 		imageData,
@@ -428,6 +446,9 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 		model,
 		language,
 	)
+
+	// Stage 3: AI extraction complete
+	stageTimings.AIExtraction = time.Since(aiExtractionStart)
 
 	totalDuration := time.Since(startTime).Seconds()
 
@@ -699,6 +720,7 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			FechaPago:               fechaPago,
 		}
 
+		dbSaveStart := time.Now()
 		if err := db.SaveClientInvoice(ctx, clientInvoice); err != nil {
 			slog.Error("ProcessInvoice SaveClientInvoice failed",
 				slog.String("error", err.Error()),
@@ -710,6 +732,8 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("DB save failed: %v", err), http.StatusInternalServerError)
 			return
 		} else {
+			// Stage 4: DB save complete
+			stageTimings.DBSave = time.Since(dbSaveStart)
 			savedClientInvoice = clientInvoice
 
 			// Queue for SharePoint sync (non-blocking)
@@ -813,7 +837,9 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add saved invoice info if available
+	invoiceID := ""
 	if savedClientInvoice != nil {
+		invoiceID = savedClientInvoice.ID
 		responseData["invoice_id"] = savedClientInvoice.ID
 		responseData["created_at"] = savedClientInvoice.CreatedAt
 		// Use proxy URL so mobile app can access the image
@@ -822,6 +848,20 @@ func (h *Handler) ProcessInvoice(w http.ResponseWriter, r *http.Request) {
 	} else {
 		responseData["saved_to_db"] = false
 	}
+
+	// Stage total + structured timing log
+	stageTimings.Total = time.Since(startTime)
+	slog.Info("ProcessInvoice timing breakdown",
+		slog.String("invoice_id", invoiceID),
+		slog.String("cliente_id", claims.UserID),
+		slog.Int64("upload_parse_ms", stageTimings.UploadParse.Milliseconds()),
+		slog.Int64("image_store_ms", stageTimings.ImageStore.Milliseconds()),
+		slog.Int64("ai_extraction_ms", stageTimings.AIExtraction.Milliseconds()),
+		slog.Int64("db_save_ms", stageTimings.DBSave.Milliseconds()),
+		slog.Int64("total_ms", stageTimings.Total.Milliseconds()),
+		slog.String("ai_provider", aiProvider),
+		slog.String("model", model),
+	)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(responseData)
