@@ -824,7 +824,9 @@ func UpdateClientInvoice(ctx context.Context, clienteID, invoiceID string, inv *
 			tipo_id_receptor = $39,
 			monto_servicios = $40,
 			monto_bienes = $41,
-			itbis_retenido_porcentaje = $42
+			itbis_retenido_porcentaje = $42,
+			aplica_606 = $43,
+			aplica_607 = $44
 		WHERE cliente_id = $1::uuid AND id = $2::uuid
 	`
 
@@ -851,6 +853,7 @@ func UpdateClientInvoice(ctx context.Context, clienteID, invoiceID string, inv *
 		inv.ExtractionStatus, inv.ReviewNotes, inv.Estado,
 		inv.ITBISTasa, inv.FechaPago, inv.NCFModifica, inv.TipoIDEmisor, inv.TipoIDReceptor,
 		inv.MontoServicios, inv.MontoBienes, inv.ITBISRetenidoPorcentaje,
+		inv.Aplica606, inv.Aplica607,
 	)
 
 	return err

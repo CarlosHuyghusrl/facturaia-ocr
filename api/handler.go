@@ -1539,6 +1539,16 @@ func applyClientInvoicePayload(inv *db.ClientInvoice, payload map[string]interfa
 				inv.Estado = s
 				applied++
 			}
+		case "aplica_606":
+			if b, ok := raw.(bool); ok {
+				inv.Aplica606 = b
+				applied++
+			}
+		case "aplica_607":
+			if b, ok := raw.(bool); ok {
+				inv.Aplica607 = b
+				applied++
+			}
 		}
 	}
 	return applied
