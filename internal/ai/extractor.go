@@ -136,6 +136,21 @@ func (e *Extractor) buildPromptDGII(ocrText string) string {
 
 	prompt := fmt.Sprintf(`Eres un EXPERTO en facturas fiscales de Republica Dominicana. Tu trabajo es extraer TODOS los datos fiscales de este texto OCR para el sistema DGII.
 
+## ⛔ REGLA INVIOLABLE — NO ALUCINES (PRIORIDAD ABSOLUTA)
+
+Si NO PUEDES LEER CLARAMENTE un campo en la imagen/texto OCR:
+- USA null (o string vacio "" para campos string segun el schema)
+- NUNCA inventes nombres, NCFs, RNCs, fechas
+- NUNCA "completes" con tu conocimiento previo de tiendas RD
+- NUNCA pongas un nombre parcial/aproximado si no estas 100%% seguro
+
+EJEMPLO MALO (alucinacion real detectada 2026-05-13):
+  Texto OCR ilegible → tu output: {"nombreEmisor": "FLOMEL"}  ← INVENTADO
+EJEMPLO BUENO:
+  Texto OCR ilegible → tu output: {"nombreEmisor": null}  ← HONESTO
+
+REGLA: prefieres devolver null/vacio a inventar. El sistema tiene UX para que el usuario edite manualmente cuando OCR falla — pero NO puede arreglar alucinaciones porque parecen datos reales.
+
 ## CONTEXTO FISCAL RD — SKILL DGII (aplica SIEMPRE antes de extraer)
 
 ### ITBIS — 3 categorias de tasa
@@ -201,8 +216,8 @@ Devuelve SOLO JSON valido (sin markdown, sin comentarios):
   "ncf": "el NCF completo",
   "tipoNcf": "B01, B02, B04, B15, E31, etc",
   "ncfModifica": "NCF original que se modifica, OBLIGATORIO si tipoNcf es B04, E32 o E33, null si no aplica",
-  "rncEmisor": "solo digitos, sin guiones - del VENDEDOR",
-  "nombreEmisor": "nombre de la tienda/empresa que VENDE",
+  "rncEmisor": "solo digitos, sin guiones - del VENDEDOR (null si no claramente legible)",
+  "nombreEmisor": "nombre EXACTO de la tienda/empresa que VENDE tal como aparece en la factura — null si no es claramente legible. NUNCA inventes ni completes con conocimiento previo. Si solo ves 'FLOM...' parcial → null, no asumas 'FLOMEL' ni 'Florinda' ni nada.",
   "tipoIdEmisor": "1=RNC empresa 9 digitos, 2=Cedula 11 digitos",
   "rncReceptor": "solo digitos, sin guiones - del COMPRADOR",
   "nombreReceptor": "nombre del cliente que COMPRA",
