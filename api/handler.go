@@ -7,10 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -1082,6 +1087,57 @@ func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// resizeImageForVision downsizes an image if any dimension exceeds maxDim pixels.
+// Uses ImageMagick (available in the container) for high-quality resize.
+// Returns original bytes unchanged if already within limits.
+func resizeImageForVision(imageData []byte, maxDim int) ([]byte, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(imageData))
+	if err != nil {
+		return imageData, nil
+	}
+
+	if cfg.Width <= maxDim && cfg.Height <= maxDim {
+		return imageData, nil
+	}
+
+	slog.Info("resizeImageForVision: image exceeds limit, resizing",
+		slog.Int("width", cfg.Width),
+		slog.Int("height", cfg.Height),
+		slog.Int("maxDim", maxDim),
+	)
+
+	tmpDir := os.TempDir()
+	inPath := filepath.Join(tmpDir, fmt.Sprintf("vision-in-%d.jpg", time.Now().UnixNano()))
+	outPath := filepath.Join(tmpDir, fmt.Sprintf("vision-out-%d.jpg", time.Now().UnixNano()))
+	defer os.Remove(inPath)
+	defer os.Remove(outPath)
+
+	if err := os.WriteFile(inPath, imageData, 0644); err != nil {
+		return nil, fmt.Errorf("write temp input: %w", err)
+	}
+
+	resizeSpec := fmt.Sprintf("%dx%d>", maxDim, maxDim)
+	cmd := exec.Command("magick", "convert", inPath, "-resize", resizeSpec, "-quality", "92", outPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		cmd2 := exec.Command("convert", inPath, "-resize", resizeSpec, "-quality", "92", outPath)
+		if output2, err2 := cmd2.CombinedOutput(); err2 != nil {
+			return nil, fmt.Errorf("ImageMagick resize failed: %s / %s", string(output), string(output2))
+		}
+	}
+
+	resized, err := os.ReadFile(outPath)
+	if err != nil {
+		return nil, fmt.Errorf("read resized output: %w", err)
+	}
+
+	slog.Info("resizeImageForVision: resize complete",
+		slog.Int("original_bytes", len(imageData)),
+		slog.Int("resized_bytes", len(resized)),
+	)
+
+	return resized, nil
+}
+
 // processInvoice performs the actual processing and returns OCR text
 func (h *Handler) processInvoice(
 	imageData []byte,
@@ -1096,12 +1152,16 @@ func (h *Handler) processInvoice(
 
 	// Step 2: OCR or prepare image for vision model
 	if useVisionModel {
-		// For AI vision models (Gemini), send the ORIGINAL image - no grayscale
-		// Gemini reads color images better than grayscale preprocessed ones
-		imageBase64 = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(imageData)
-		slog.Info("ProcessInvoice using original image for vision model",
-		slog.Int("bytes", len(imageData)),
-	)
+		visionData, err := resizeImageForVision(imageData, 4000)
+		if err != nil {
+			slog.Warn("resizeImageForVision failed, using original", slog.String("error", err.Error()))
+			visionData = imageData
+		}
+		imageBase64 = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(visionData)
+		slog.Info("ProcessInvoice using image for vision model",
+			slog.Int("original_bytes", len(imageData)),
+			slog.Int("vision_bytes", len(visionData)),
+		)
 	} else {
 		// For Tesseract OCR, preprocess with grayscale+contrast
 		preprocessor := ocr.NewPreprocessor(h.config.OCR.Engine == "easyocr")

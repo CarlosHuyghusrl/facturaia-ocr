@@ -336,14 +336,13 @@ func (e *Extractor) parseResponseDGII(response string, ocrText string) (*models.
 	cleaned = strings.ReplaceAll(cleaned, backticks, "")
 	cleaned = strings.TrimSpace(cleaned)
 
-	// If response doesn't start with {, try to extract JSON from it
-	if !strings.HasPrefix(cleaned, "{") {
-		// Try to find JSON object in the response
-		startIdx := strings.Index(cleaned, "{")
-		endIdx := strings.LastIndex(cleaned, "}")
-		if startIdx >= 0 && endIdx > startIdx {
-			cleaned = cleaned[startIdx : endIdx+1]
-		}
+	// Extract JSON object between first { and last } — always, not just
+	// when the string doesn't start with {. The AI may append markdown
+	// commentary after the closing }, which breaks json.Unmarshal.
+	startIdx := strings.Index(cleaned, "{")
+	endIdx := strings.LastIndex(cleaned, "}")
+	if startIdx >= 0 && endIdx > startIdx {
+		cleaned = cleaned[startIdx : endIdx+1]
 	}
 
 	// Parse JSON - use interface{} for flexible number parsing (handles strings with commas)
